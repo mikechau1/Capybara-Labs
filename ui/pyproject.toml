@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "capybara-ui"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+# Pin exact versions. Streamlit must stay at 1.53 or later for st.user.tokens (card M1-07).
+dependencies = [
+  "streamlit==1.67.0",
+  "httpx==0.28.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.2.0",
+  "ruff==0.17.5",
+]
+
+# Installs dependencies only; the code runs from this folder.
+[tool.setuptools]
+packages = []
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

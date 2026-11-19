@@ -1,0 +1,9 @@
+# Shared lint and format rules for every Python service in the repo.
+target-version = "py312"
+line-length = 100
+
+[lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[lint.isort]
+known-first-party = ["app", "core", "components", "views"]
