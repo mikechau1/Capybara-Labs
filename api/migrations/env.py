@@ -39,7 +39,12 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    engine = create_engine(_database_url(), poolclass=pool.NullPool)
+    engine = create_engine(
+        _database_url(),
+        poolclass=pool.NullPool,
+        # Give up after 10 s if the database is unreachable, instead of hanging.
+        connect_args={"connect_timeout": 10},
+    )
     with engine.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
         # PostgreSQL runs schema changes in a transaction, so a failed migration changes nothing.
