@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,11 +12,17 @@ class Settings(BaseSettings):
 
     environment: Literal["development", "test", "production"] = "development"
     auth_mode: Literal["dev", "oidc"] = "oidc"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     oidc_issuer: str = ""
     oidc_audience: str = ""
     database_url: str = ""
     llm_provider: Literal["stub"] = "stub"  # card M3-02 adds the real provider
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _upper_log_level(cls, value: object) -> object:
+        return value.upper() if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def _no_dev_auth_in_production(self) -> "Settings":
