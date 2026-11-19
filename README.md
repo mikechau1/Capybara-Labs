@@ -8,7 +8,20 @@ CMPE 272 project: a chatbot that answers questions from company data across depa
 
 ## Run it
 
-**With Docker** (needs Docker Desktop):
+Commands are given for **Windows (PowerShell)** and **macOS / Linux (bash)**. Run them from the repo root unless a step says otherwise.
+
+### With Docker
+
+Needs Docker Desktop running (on Linux, Docker Engine with the Compose plugin also works).
+
+Windows (PowerShell):
+
+```powershell
+Copy-Item .env.example .env
+docker compose up --build
+```
+
+macOS / Linux (bash):
 
 ```bash
 cp .env.example .env
@@ -17,26 +30,64 @@ docker compose up --build
 
 - UI: http://localhost:8501 (pick a demo user from the sidebar dropdown)
 - API docs: http://localhost:8000/docs
+- Stop with Ctrl+C, or `docker compose down`. Next time, `docker compose up` is enough; add `--build` again after changing a Dockerfile or a `pyproject.toml`.
 
 Add Keycloak with `docker compose --profile sso up --build` (admin console on http://localhost:8080). You only need it for the SSO cards.
 
-**Without Docker**, one terminal per service:
+### Without Docker
+
+Needs Python 3.12. Use one terminal per service.
+
+Windows (PowerShell):
+
+```powershell
+cd api
+py -3.12 -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+$env:AUTH_MODE="dev"; uvicorn app.main:app --reload
+```
+
+```powershell
+cd ui
+py -3.12 -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+$env:AUTH_MODE="dev"; streamlit run app.py
+```
+
+If PowerShell says running scripts is disabled, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, then activate again.
+
+macOS / Linux (bash):
 
 ```bash
 cd api
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python3.12 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
-AUTH_MODE=dev uvicorn app.main:app --reload         # Windows PowerShell: $env:AUTH_MODE="dev"; uvicorn ...
+AUTH_MODE=dev uvicorn app.main:app --reload
 ```
 
 ```bash
 cd ui
-python -m venv .venv && source .venv/bin/activate
+python3.12 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 AUTH_MODE=dev streamlit run app.py
 ```
 
-**Checks** (run from the repo root, and `pytest` inside `api/` and `ui/`):
+### Checks
+
+Lint from the repo root, with a virtual environment from above activated. Then run `pytest` inside `api/` and `ui/`.
+
+Windows (PowerShell):
+
+```powershell
+ruff check .
+ruff format --check .
+```
+
+macOS / Linux (bash):
 
 ```bash
 ruff check . && ruff format --check .
