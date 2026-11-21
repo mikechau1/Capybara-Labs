@@ -29,6 +29,11 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
       # Serves /health/ready on the management port 9000 (inside the container only).
       KC_HEALTH_ENABLED: "true"
+      # Tokens name their issuer after the address Keycloak was reached on. Fix it to the
+      # browser's address, so a token from a login at localhost:8080 still matches
+      # OIDC_ISSUER when the api checks it; containers keep reaching Keycloak at idp:8080.
+      KC_HOSTNAME: http://localhost:8080
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
     volumes:
       - ./infra/keycloak:/opt/keycloak/data/import:ro
     ports:
