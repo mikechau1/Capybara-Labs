@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     oidc_issuer: str = ""
     oidc_audience: str = ""
+    oidc_jwks_url: str = ""  # where the API fetches Keycloak's signing keys
     database_url: str = ""
     llm_provider: Literal["stub"] = "stub"  # card M3-02 adds the real provider
 
