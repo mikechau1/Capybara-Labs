@@ -1,0 +1,162 @@
+{
+  "realm": "capybara",
+  "displayName": "Capybara Labs",
+  "enabled": true,
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "roles": {
+    "realm": [
+      { "name": "member", "description": "Department member" },
+      { "name": "manager", "description": "Department manager" },
+      { "name": "owner", "description": "Department owner: manages grants and access requests" },
+      { "name": "app-admin", "description": "Runs the system. Gives no data access by itself" }
+    ]
+  },
+  "groups": [
+    { "name": "engineering" },
+    { "name": "finance" }
+  ],
+  "users": [
+    {
+      "id": "83c50624-29ee-50e9-a4dd-abef7c5aad41",
+      "username": "eng.member",
+      "firstName": "Eli",
+      "lastName": "Park",
+      "email": "eng.member@capybara.example",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "capybara", "temporary": false }],
+      "realmRoles": ["member"],
+      "groups": ["/engineering"]
+    },
+    {
+      "id": "012be0f9-48d7-5b8c-b52a-478d491904b4",
+      "username": "eng.manager",
+      "firstName": "Maya",
+      "lastName": "Chen",
+      "email": "eng.manager@capybara.example",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "capybara", "temporary": false }],
+      "realmRoles": ["manager"],
+      "groups": ["/engineering"]
+    },
+    {
+      "id": "488d457d-aa8e-5d70-9cda-e66d4d3aa598",
+      "username": "eng.owner",
+      "firstName": "Omar",
+      "lastName": "Haddad",
+      "email": "eng.owner@capybara.example",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "capybara", "temporary": false }],
+      "realmRoles": ["owner"],
+      "groups": ["/engineering"]
+    },
+    {
+      "id": "5af5e95d-d4b9-574f-b5b0-3f365e34765f",
+      "username": "fin.member",
+      "firstName": "Fiona",
+      "lastName": "Walsh",
+      "email": "fin.member@capybara.example",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "capybara", "temporary": false }],
+      "realmRoles": ["member"],
+      "groups": ["/finance"]
+    },
+    {
+      "id": "f14b3b11-5a3e-533f-9e98-a52c44baa0ae",
+      "username": "fin.manager",
+      "firstName": "Marco",
+      "lastName": "Rossi",
+      "email": "fin.manager@capybara.example",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "capybara", "temporary": false }],
+      "realmRoles": ["manager"],
+      "groups": ["/finance"]
+    },
+    {
+      "id": "80d84202-eff7-523b-87c7-d04155521822",
+      "username": "fin.owner",
+      "firstName": "Olivia",
+      "lastName": "Grant",
+      "email": "fin.owner@capybara.example",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "capybara", "temporary": false }],
+      "realmRoles": ["owner"],
+      "groups": ["/finance"]
+    },
+    {
+      "id": "df48e0e5-2e74-570b-95ff-50d581a87b42",
+      "username": "app.admin",
+      "firstName": "Ada",
+      "lastName": "Okafor",
+      "email": "app.admin@capybara.example",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "capybara", "temporary": false }],
+      "realmRoles": ["member", "app-admin"],
+      "groups": ["/engineering"]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "capybara-ui",
+      "name": "Capybara Labs UI",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "capybara-ui-dev-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:8501/oauth2callback"],
+      "webOrigins": ["http://localhost:8501"],
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost:8501/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "department",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "capybara-api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "capybara-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "capybara-api",
+      "name": "Capybara Labs API",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false
+    }
+  ]
+}
