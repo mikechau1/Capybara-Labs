@@ -2,6 +2,7 @@
   "realm": "capybara",
   "displayName": "Capybara Labs",
   "enabled": true,
+  "accessTokenLifespan": 1800,
   "registrationAllowed": false,
   "resetPasswordAllowed": false,
   "rememberMe": false,

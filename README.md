@@ -32,7 +32,15 @@ docker compose up --build
 - API docs: http://localhost:8000/docs
 - Stop with Ctrl+C, or `docker compose down`. Next time, `docker compose up` is enough; add `--build` again after changing a Dockerfile or a `pyproject.toml`.
 
-Add Keycloak with `docker compose --profile sso up --build` (admin console on http://localhost:8080). You only need it for the SSO cards.
+#### With single sign-on (Keycloak)
+
+Dev mode is enough for most cards. To log in through Keycloak instead:
+
+1. In `.env`, set `AUTH_MODE=oidc`.
+2. Copy `ui/.streamlit/secrets.toml.example` to `ui/.streamlit/secrets.toml` and replace `cookie_secret` as its comments say.
+3. `docker compose --profile sso up --build`, then open http://localhost:8501 and log in as a [demo user](docs/demo-users.md) (password `capybara`).
+
+Keycloak's admin console is on http://localhost:8080. A session lasts 30 minutes; after that the UI asks you to log in again. If Safari shows Keycloak's "Cookie not found" page, use Chrome or Firefox: Keycloak's cookies need a browser that treats `http://localhost` as secure. Set `AUTH_MODE=dev` again to go back.
 
 ### Without Docker
 
