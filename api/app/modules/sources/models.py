@@ -77,6 +77,10 @@ def _uuid_pk() -> Mapped[uuid.UUID]:
 
 class Department(Timestamps, Base):
     __tablename__ = "departments"
+    __table_args__ = (
+        # Lowercase slugs only, as in tokens and pool names; added by migration 0003 (M2-02).
+        CheckConstraint("id ~ '^[a-z0-9][a-z0-9-]*$'", name="id_is_slug"),
+    )
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True)  # e.g. "engineering"
     name: Mapped[str] = mapped_column(String(100))  # e.g. "Engineering"

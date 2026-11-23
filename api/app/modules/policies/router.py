@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter
 
 from app.modules.auth.dependencies import CurrentUser
@@ -26,7 +28,7 @@ def create_grant(body: GrantCreate, user: CurrentUser) -> Grant:
 
 
 @router.post("/grants/{grant_id}/revoke", response_model=Grant)
-def revoke_grant(grant_id: str, user: CurrentUser) -> Grant:
+def revoke_grant(grant_id: UUID, user: CurrentUser) -> Grant:
     raise not_implemented("M4-01")
 
 

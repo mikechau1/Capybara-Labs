@@ -90,3 +90,20 @@ def chunk(
     db.add(row)
     db.flush()
     return row
+
+
+def grant(db: Session, owning_department: str = "finance", **fields):
+    """A department grant to every member by default; pass grantee_user_id for a named user."""
+    from app.modules.policies.models import Grant
+    from app.shared.types import Role
+
+    department(db, owning_department)
+    if fields.get("grantee_department"):
+        department(db, fields["grantee_department"])
+    if "grantee_user_id" not in fields:
+        fields.setdefault("grantee_min_role", Role.MEMBER)
+    fields.setdefault("max_sensitivity", Sensitivity.INTERNAL)
+    row = Grant(owning_department=owning_department, created_by="owner-1", **fields)
+    db.add(row)
+    db.flush()
+    return row
