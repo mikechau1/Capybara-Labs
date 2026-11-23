@@ -30,7 +30,9 @@ docker compose up --build
 
 - UI: http://localhost:8501 (pick a demo user from the sidebar dropdown)
 - API docs: http://localhost:8000/docs
-- Stop with Ctrl+C, or `docker compose down`. Next time, `docker compose up` is enough; add `--build` again after changing a Dockerfile or a `pyproject.toml`.
+- Stop with Ctrl+C, or `docker compose down`. Next time, `docker compose up` is enough; add `--build` again after changing a Dockerfile or a `pyproject.toml`, or after pulling a new database migration.
+
+Database migrations apply automatically on `up` (the short-lived `migrate` service). Migrations are built into the image, so after pulling a teammate's migration use `docker compose up --build`. See [api/migrations/README.md](api/migrations/README.md) to add one.
 
 Add Keycloak with `docker compose --profile sso up --build` (admin console on http://localhost:8080). You only need it for the SSO cards.
 

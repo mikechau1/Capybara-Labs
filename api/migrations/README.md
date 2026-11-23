@@ -4,11 +4,15 @@ Each file in `versions/` is one step that changes the database structure. They r
 
 ## Apply migrations
 
-Inside Docker (the usual way):
+`docker compose up` does it for you: the `migrate` service runs `alembic upgrade head` and exits, and the API starts only after it succeeds. If the API won't start, check `docker compose logs migrate`.
+
+Migrations are copied into the image when it is built, so after pulling a teammate's new migration, rebuild: `docker compose up --build`, or while the stack is running:
 
 ```bash
-docker compose run --rm api alembic upgrade head
+docker compose run --rm --build migrate
 ```
+
+Without `--build`, the old image runs and reports nothing to do.
 
 From your machine, with the API's virtual environment active and from the `api/` folder:
 
@@ -42,5 +46,9 @@ Use your `POSTGRES_HOST_PORT` instead of `5432` if you changed it. Other useful 
 6. Run `ruff format .` from the repo root, and commit the migration with your models in the same pull request.
 
 **Two teammates chose the same number?** Alembic stops with "multiple heads". Whoever merges second renumbers their file, changes `revision` to match the new number, and sets `down_revision` to the number of the migration merged first.
+
+**`alembic check` does not see enum or CHECK changes.** Adding a value to `SourceType`, `Sensitivity`, `Role` or `SYNC_STATUSES` changes a CHECK constraint, which autogenerate ignores. Write that migration by hand (drop and recreate the constraint); `tests/test_migrations.py` fails until you do.
+
+**New table with `Timestamps`?** Add the `set_updated_at` trigger to it in your migration (copy from `0002`), so `updated_at` also changes on raw SQL and upserts; `tests/test_migrations.py` checks every table has it.
 
 Never edit a migration that has been merged; add a new one instead, because teammates' databases have already run the old one.
