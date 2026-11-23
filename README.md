@@ -45,7 +45,7 @@ cd api
 py -3.12 -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
-$env:AUTH_MODE="dev"; uvicorn app.main:app --reload
+$env:AUTH_MODE="dev"; $env:EMBEDDER="fake"; uvicorn app.main:app --reload
 ```
 
 ```powershell
@@ -65,7 +65,7 @@ cd api
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-AUTH_MODE=dev uvicorn app.main:app --reload
+AUTH_MODE=dev EMBEDDER=fake uvicorn app.main:app --reload
 ```
 
 ```bash
