@@ -1,0 +1,151 @@
+/* Login screen styles. Loaded by login_screen.py, only while that screen shows.
+   Colours and fonts follow the logo and the app theme in .streamlit/config.toml. */
+
+@import url('https://fonts.googleapis.com/css2?family=Exo+2:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+:root {
+  --void: #0A0E14;
+  --panel: #14161B;
+  --line: #262A35;
+  --text: #EEF1F6;
+  --muted: #9AA3B2;
+  --circuit: #33B3FA;
+  --lab: #8B64C8;
+  --brand-gradient: linear-gradient(90deg, var(--circuit), var(--lab));
+  --water-public: #7FCBF7;
+  --water-internal: #5C86E0;
+  --water-restricted: #8B64C8;
+  /* The logo banner's cut corners. */
+  --chamfer: 12px;
+}
+
+header[data-testid="stHeader"] { display: none; }
+[data-testid="stMainBlockContainer"] {
+  max-width: 1140px;
+  padding: clamp(1.5rem, 6vh, 4rem) clamp(1rem, 4vw, 3rem) 3rem;
+}
+.cl, .cl * {
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  color: var(--text);
+}
+
+.cl-logo { display: block; width: clamp(170px, 18vw, 230px); height: auto; margin: 0 0 1.75rem -6px; }
+
+.cl-pitch h1 {
+  font-family: "Exo 2", ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(2.5rem, 4.4vw, 3.75rem);
+  font-weight: 800;
+  line-height: 1.02;
+  letter-spacing: -.01em;
+  margin: 0 0 1rem;
+  padding: 0;
+  max-width: 11ch;
+}
+.cl-pitch p {
+  font-size: 1.125rem;
+  line-height: 1.55;
+  max-width: 36ch;
+  margin: 0 0 1.75rem;
+  color: var(--muted);
+}
+
+/* The one bold element: the login button is the logo's banner plate. A gradient edge,
+   a black plate inside it, both with the banner's cut corners. */
+.st-key-sso_login { width: fit-content !important; transition: filter .15s ease; }
+.st-key-sso_login:hover { filter: drop-shadow(0 0 14px rgba(139, 100, 200, .45)); }
+.st-key-sso_login:has(button:focus-visible) { outline: 2px solid var(--circuit); outline-offset: 5px; }
+.st-key-sso_login button,
+.st-key-sso_login button > div {
+  clip-path: polygon(
+    var(--chamfer) 0, calc(100% - var(--chamfer)) 0, 100% var(--chamfer),
+    100% calc(100% - var(--chamfer)), calc(100% - var(--chamfer)) 100%,
+    var(--chamfer) 100%, 0 calc(100% - var(--chamfer)), 0 var(--chamfer)
+  );
+}
+.st-key-sso_login button {
+  background: var(--brand-gradient);
+  border: 0;
+  border-radius: 0;
+  padding: 2px;
+  min-height: 0;
+}
+.st-key-sso_login button:hover, .st-key-sso_login button:active { background: var(--brand-gradient); border: 0; }
+.st-key-sso_login button:focus:not(:active) { border: 0; }
+.st-key-sso_login button > div {
+  background: var(--void);
+  padding: .95rem 1.75rem;
+}
+.st-key-sso_login button p {
+  font-family: "Exo 2", ui-sans-serif, system-ui, sans-serif;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: .01em;
+  color: var(--text);
+}
+
+.cl-note { font-size: .9375rem; line-height: 1.5; color: var(--muted); max-width: 38ch; margin: .5rem 0 0; }
+
+.cl-map {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: clamp(1.25rem, 2.6vw, 2rem);
+}
+.cl-map h2 {
+  font-family: "Exo 2", ui-sans-serif, system-ui, sans-serif;
+  font-size: 1.375rem;
+  font-weight: 700;
+  margin: 0;
+  padding: 0;
+}
+/* Echoes the gradient lines beside LABS in the logo. */
+.cl-rule { display: block; width: 4.5rem; height: 2px; background: var(--brand-gradient); margin: .6rem 0 1.25rem; }
+
+.cl-map table { table-layout: fixed; width: 100%; border-collapse: separate; border-spacing: .5rem .35rem; margin: 0 -.5rem; }
+.cl-map th, .cl-map td { border: 0; padding: 0; background: none; text-align: left; vertical-align: middle; }
+.cl-map thead th { font-weight: 600; font-size: 1rem; }
+.cl-map thead tr + tr th { font-weight: 400; font-size: .8125rem; color: var(--muted); text-align: center; }
+.cl-dept { text-align: center !important; border-bottom: 1px solid var(--line) !important; padding-bottom: .4rem !important; }
+.cl-corner { width: 34%; }
+.cl-map tbody th { padding-right: .5rem; }
+.cl-map tbody th b { display: block; font-size: 1rem; font-weight: 600; }
+.cl-map tbody th small { display: block; font-size: .8125rem; line-height: 1.3; color: var(--muted); }
+
+/* A pool, seen from above. Its water follows the logo's gradient as sensitivity rises:
+   circuit blue for public, lab purple for restricted. Restricted ponds are fenced. */
+.cl-pool { position: relative; display: block; height: 34px; margin: 4px 3px; }
+.cl-pool i {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 3px 0 rgba(255, 255, 255, .28), inset 0 -5px 0 rgba(10, 14, 20, .3);
+  animation: cl-ripple .9s cubic-bezier(.2, .75, .2, 1) both;
+  animation-delay: calc(var(--n) * 45ms);
+}
+.cl-s0 { border-radius: 58% 42% 50% 50% / 55% 48% 52% 45%; }
+.cl-s1 { border-radius: 45% 55% 42% 58% / 50% 60% 40% 50%; }
+.cl-s2 { border-radius: 52% 48% 60% 40% / 42% 52% 48% 58%; }
+.cl-public i { background: var(--water-public); }
+.cl-internal i { background: var(--water-internal); }
+.cl-restricted i { background: var(--water-restricted); }
+.cl-restricted { outline: 2px dashed rgba(238, 241, 246, .75); outline-offset: 3px; }
+@keyframes cl-ripple { from { transform: scale(.35); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .cl-pool i { animation: none; } }
+
+.cl-foot { font-size: .9375rem; line-height: 1.5; color: var(--muted); margin: 1.25rem 0 0; max-width: 52ch; }
+
+/* Narrow screens: each level's label sits on its own line above its ponds, and the label
+   column goes, so the six pond columns get the whole width. */
+.cl-stack { display: none; }
+@media (max-width: 560px) {
+  .cl-corner, .cl-side { display: none; }
+  .cl-stack { display: table-row; }
+  .cl-stack th { padding-top: .6rem; line-height: 1.3; }
+  .cl-map .cl-stack th b,
+  .cl-map .cl-stack th small { display: inline; }
+  .cl-map .cl-stack th small { margin-left: .4rem; }
+  .cl-map thead tr + tr th { font-size: .75rem; }
+  .cl-map table { border-spacing: .25rem .3rem; margin: 0 -.25rem; }
+  .cl-pool { height: 30px; margin: 4px; }
+  .cl-restricted { outline-offset: 2px; }
+}

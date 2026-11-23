@@ -87,6 +87,10 @@ services:
         required: false
     environment:
       API_BASE_URL: http://api:8000
+    volumes:
+      # Brings in .streamlit/secrets.toml, which never goes into the image. Needed only for
+      # AUTH_MODE=oidc; see ui/.streamlit/secrets.toml.example. Restart ui after editing it.
+      - ./ui/.streamlit:/srv/.streamlit:ro
     depends_on:
       api:
         condition: service_healthy

@@ -1,5 +1,33 @@
 [server]
 headless = true
+# Serves ./static at app/static/, for the logo on the login screen.
+enableStaticServing = true
 
 [browser]
 gatherUsageStats = false
+
+[client]
+# No Deploy button or developer menu items: this is the product, not a dev preview.
+toolbarMode = "viewer"
+
+# Brand theme, taken from the Capybara Labs logo (ui/static/logo.png).
+[theme]
+base = "dark"
+backgroundColor = "#0A0E14"
+secondaryBackgroundColor = "#14161B"
+textColor = "#EEF1F6"
+# Lab purple, deepened slightly from the logo's #8B64C8 so white button text stays readable.
+primaryColor = "#7C54C0"
+# Circuit blue: readable as link text on the dark background.
+linkColor = "#33B3FA"
+borderColor = "#262A35"
+showWidgetBorder = true
+baseRadius = "small"
+font = "'IBM Plex Sans':https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+headingFont = "'Exo 2':https://fonts.googleapis.com/css2?family=Exo+2:wght@600;700;800&display=swap"
+headingFontWeights = [800, 700, 700, 600, 600, 600]
+chartCategoricalColors = ["#33B3FA", "#8B64C8", "#CE8F5A", "#5C86E0", "#B48CF0", "#7FCBF7"]
+
+[theme.sidebar]
+backgroundColor = "#0F1319"
+secondaryBackgroundColor = "#181B22"
