@@ -19,10 +19,16 @@ target_metadata = Base.metadata
 
 
 def _database_url() -> str:
-    # The test fixture passes its own URL; everything else uses DATABASE_URL.
-    url = config.attributes.get("database_url") or get_settings().database_url
+    # The test fixture passes its own URL. Otherwise migrations run as the owner
+    # (MIGRATION_DATABASE_URL); the API's own login cannot create or alter tables.
+    settings = get_settings()
+    url = (
+        config.attributes.get("database_url")
+        or settings.migration_database_url
+        or settings.database_url
+    )
     if not url:
-        raise RuntimeError("DATABASE_URL is not set. Copy .env.example to .env.")
+        raise RuntimeError("MIGRATION_DATABASE_URL is not set. Copy .env.example to .env.")
     return url
 
 

@@ -9,8 +9,12 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-capybara}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-capybara}
       POSTGRES_DB: ${POSTGRES_DB:-capybara}
+      # The API's limited login, created by infra/postgres/init on a fresh volume (card M3-07).
+      APP_DB_USER: ${APP_DB_USER:-capybara_api}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-capybara_api}
     volumes:
       - dbdata:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
     ports:
       # Port on your machine; set POSTGRES_HOST_PORT in .env if 5432 is already taken.
       - "${POSTGRES_HOST_PORT:-5432}:5432"
@@ -67,6 +71,10 @@ services:
     env_file:
       - path: .env
         required: false
+    # Only `migrate` and `db` get the owner's credentials (card M3-07).
+    environment:
+      MIGRATION_DATABASE_URL: ""
+      POSTGRES_PASSWORD: ""
     depends_on:
       db:
         condition: service_healthy
@@ -97,6 +105,11 @@ services:
         required: false
     environment:
       API_BASE_URL: http://api:8000
+      # The UI never talks to the database (it calls the API).
+      DATABASE_URL: ""
+      MIGRATION_DATABASE_URL: ""
+      POSTGRES_PASSWORD: ""
+      APP_DB_PASSWORD: ""
     depends_on:
       api:
         condition: service_healthy

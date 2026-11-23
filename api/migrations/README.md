@@ -51,4 +51,6 @@ Use your `POSTGRES_HOST_PORT` instead of `5432` if you changed it. Other useful 
 
 **New table with `Timestamps`?** Add the `set_updated_at` trigger to it in your migration (copy from `0002`), so `updated_at` also changes on raw SQL and upserts; `tests/test_migrations.py` checks every table has it.
 
+**What the API may do with your new table.** Migrations run as the database owner; the API connects as a limited login (`capybara_app` role, see `infra/postgres/README.md`). New tables automatically get SELECT, INSERT, UPDATE and DELETE for the API. If the API must not change or remove rows (like `audit_events`), `REVOKE` that in your migration and add a test that runs as `capybara_app` (see `tests/test_audit.py`).
+
 Never edit a migration that has been merged; add a new one instead, because teammates' databases have already run the old one.

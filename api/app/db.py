@@ -34,7 +34,7 @@ from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
-from sqlalchemy import DateTime, Engine, Enum, MetaData, create_engine, func
+from sqlalchemy import Connection, DateTime, Engine, Enum, MetaData, create_engine, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.config import get_settings
@@ -92,17 +92,43 @@ class Timestamps:
 
 @lru_cache
 def get_engine() -> Engine:
-    """One connection pool for the whole process, created on first use."""
-    url = get_settings().database_url
-    if not url:
+    """One connection pool for the whole process, created on first use. Outside tests, refuses
+    to run as a superuser or table owner (see `check_app_login`)."""
+    settings = get_settings()
+    if not settings.database_url:
         raise RuntimeError("DATABASE_URL is not set. Copy .env.example to .env.")
-    return create_engine(
-        url,
+    engine = create_engine(
+        settings.database_url,
         # Replace connections the database has closed, e.g. after a Postgres restart.
         pool_pre_ping=True,
         # Fail a request after 10 s if the database is unreachable, instead of hanging.
         connect_args={"connect_timeout": 10},
     )
+    if settings.environment != "test":
+        with engine.connect() as connection:
+            check_app_login(connection)
+    return engine
+
+
+def check_app_login(connection: Connection) -> None:
+    """Refuse a login that could edit the audit log: a superuser, or the owner of audit_events.
+
+    The API must connect as its limited login (DATABASE_URL, see infra/postgres/README.md). An
+    old .env pointing at the owner would otherwise run silently, relying only on triggers that a
+    superuser can switch off.
+    """
+    superuser, owner = connection.execute(
+        text(
+            "SELECT r.rolsuper, EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'audit_events'"
+            " AND tableowner = current_user) FROM pg_roles r WHERE r.rolname = current_user"
+        )
+    ).one()
+    if superuser or owner:
+        raise RuntimeError(
+            "The API is connected to the database as a superuser or table owner. Set "
+            "DATABASE_URL to the limited app login (copy .env.example to .env, then "
+            "docker compose down -v). See infra/postgres/README.md."
+        )
 
 
 def import_all_models() -> None:
