@@ -1,4 +1,4 @@
-# Card M1-09 owns this file. A weekly check for vulnerabilities published since code merged.
+# Card M1-09 owns this file. A daily check for vulnerabilities published since code merged.
 #
 # CI (ci.yml) scans Python packages on every pull request. A new advisory, though, can land
 # on a pin that is already merged, and then every open pull request goes red at once. This
@@ -6,14 +6,14 @@
 # the Docker images, which CI does not.
 #
 # GitHub runs schedules, and the Run workflow button, only from the default branch (main), so
-# this starts once skeleton is merged into main. From then on it also scans skeleton every week,
+# this starts once skeleton is merged into main. From then on it also scans skeleton every day,
 # and Actions → Dependency scan → Run workflow starts it by hand. A failed scheduled run emails
 # whoever last changed the cron line below.
 name: Dependency scan
 
 on:
   schedule:
-    - cron: "0 14 * * 1" # Mondays, 14:00 UTC
+    - cron: "0 14 * * *" # every day, 14:00 UTC
   workflow_dispatch:
 
 permissions:
@@ -63,15 +63,19 @@ jobs:
       # gosu is skipped. The Postgres image uses it once, at startup, to drop root, and its
       # findings are all in Go's network and TLS code, which gosu never runs. Every Postgres
       # image ships it, so no bump would clear them, and the run would stay red for good.
-      - run: docker compose --profile sso build
+      #
+      # Findings waiting on an upstream fix are listed, with an expiry date, in
+      # .github/trivyignore.yaml.
+      - run: docker compose --profile sso build --pull
       - name: Scan images
         run: |
           status=0
           for image in $(docker compose --profile sso config --images); do
             echo "::group::$image"
             docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$PWD/.github/trivyignore.yaml:/trivyignore.yaml:ro" \
               aquasec/trivy:0.76.1 image --scanners vuln --severity HIGH,CRITICAL \
-              --ignore-unfixed --skip-files usr/local/bin/gosu \
+              --ignore-unfixed --skip-files usr/local/bin/gosu --ignorefile /trivyignore.yaml \
               --exit-code 1 --no-progress "$image" || status=1
             echo "::endgroup::"
           done

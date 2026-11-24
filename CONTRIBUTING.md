@@ -38,7 +38,7 @@ CI's **Dependency scan** step fails when an installed Python package has a known
 3. **Open the bump as its own small pull request** against `skeleton`, so everyone can rebase onto it rather than each fixing it in their own branch. Say in the team chat that it's coming.
 4. **No fixed version yet?** Add `--ignore-vuln <ID>` to the `pip-audit` command in `.github/workflows/ci.yml` and `dependency-scan.yml`, with a comment saying why it's safe for now and a `TODO(<card>)` to remove it.
 
-A weekly run (`.github/workflows/dependency-scan.yml`) scans `main` and `skeleton` the same way, and also scans the Docker images, so most new advisories show up there before they block anyone. For an image, bump its tag in `docker-compose.yml` or the `FROM` line of the service's `Dockerfile`.
+A daily run (`.github/workflows/dependency-scan.yml`) scans `main` and `skeleton` the same way, and also scans the Docker images, so most new advisories show up there before they block anyone. For an image, bump its tag in `docker-compose.yml` or the `FROM` line of the service's `Dockerfile`. If the fix has to come from upstream (a new base image, or a library bundled inside an image), add the finding to `.github/trivyignore.yaml` with a reason and an expiry date.
 
 ## Code style
 
