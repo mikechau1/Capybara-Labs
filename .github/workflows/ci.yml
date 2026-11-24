@@ -35,7 +35,7 @@ jobs:
     timeout-minutes: 10
     services:
       db:
-        image: pgvector/pgvector:0.8.0-pg16 # same image as docker-compose.yml
+        image: pgvector/pgvector:0.8.7-pg16 # same image as docker-compose.yml
         env:
           POSTGRES_USER: capybara
           POSTGRES_PASSWORD: capybara
@@ -61,12 +61,20 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: api/pyproject.toml
+      # pip-audit scans pip too, so start from the latest pip rather than the runner's copy.
+      - run: python -m pip install --upgrade pip
       - run: pip install ".[dev]"
       - name: Migrations apply to an empty database
         run: alembic upgrade head
       - name: Models and migrations match (fails if a model changed without a migration)
         run: alembic check
       - run: pytest -q
+      # Fails if any installed package has a known vulnerability; CONTRIBUTING.md says what
+      # to do. It runs after the tests, so a failure here never hides their results.
+      # Keep the pip-audit version the same as in dependency-scan.yml.
+      - name: Dependency scan
+        if: ${{ !cancelled() }}
+        run: pip install pip-audit==2.10.1 && pip-audit
 
   test-ui:
     runs-on: ubuntu-latest
@@ -81,5 +89,10 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: ui/pyproject.toml
+      # Same dependency scan as test-api; see the comments there.
+      - run: python -m pip install --upgrade pip
       - run: pip install ".[dev]"
       - run: pytest -q
+      - name: Dependency scan
+        if: ${{ !cancelled() }}
+        run: pip install pip-audit==2.10.1 && pip-audit
