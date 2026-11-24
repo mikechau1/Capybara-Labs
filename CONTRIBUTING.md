@@ -29,6 +29,17 @@ If you change a schema, update the UI code that reads it in the same pull reques
 - **Endpoint not built yet?** Stubs answer `501 Not implemented` with the card ID, and the UI shows that as a "not built yet" note rather than an error. Build your page against the response model in `schemas.py`, and test it with a fake API as `ui/tests/test_ui_skeleton.py` does.
 - **Function not built yet?** Stubs raise `NotImplementedError("Card ...")`. Write your code against the signature and fake it in your tests.
 
+## When the dependency scan fails
+
+CI's **Dependency scan** step fails when an installed Python package has a known vulnerability. This can happen on a pull request that never touched dependencies, because advisories are published against versions already merged. The scan runs after the tests, so the tests' results are still there to check.
+
+1. **Look at the step's output.** It lists each package, the advisory ID and the versions that fix it.
+2. **Bump the pin** to the lowest fixed version, in the `pyproject.toml` of the service that pins it. If the package isn't pinned directly (a dependency of a dependency), add it to `dependencies` with the fixed version, and a comment saying which advisory it is there for.
+3. **Open the bump as its own small pull request** against `skeleton`, so everyone can rebase onto it rather than each fixing it in their own branch. Say in the team chat that it's coming.
+4. **No fixed version yet?** Add `--ignore-vuln <ID>` to the `pip-audit` command in `.github/workflows/ci.yml` and `dependency-scan.yml`, with a comment saying why it's safe for now and a `TODO(<card>)` to remove it.
+
+A daily run (`.github/workflows/dependency-scan.yml`) scans `main` and `skeleton` the same way, and also scans the Docker images, so most new advisories show up there before they block anyone. For an image, bump its tag in `docker-compose.yml` or the `FROM` line of the service's `Dockerfile`. If the fix has to come from upstream (a new base image, or a library bundled inside an image), add the finding to `.github/trivyignore.yaml` with a reason and an expiry date.
+
 ## Code style
 
 - Python 3.12. `ruff check .` and `ruff format .` from the repo root; `pre-commit install` runs them on every commit.

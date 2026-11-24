@@ -164,7 +164,8 @@ Pages each role sees (hiding is a convenience; the API enforces permissions):
 | `docker-compose.yml` | Local stack | M1-02 |
 | `infra/keycloak/` | Realm export | M1-05 |
 | `seed/` | Mock company data and the canary inventory | M2-06, M4-07, M4-09 |
-| `.github/workflows/ci.yml` | Lint and tests on every pull request | M1-08 |
+| `.github/workflows/ci.yml` | Lint, dependency scan and tests on every pull request | M1-08, M1-09 |
+| `.github/workflows/dependency-scan.yml` | Daily scan of Python packages and Docker images | M1-09 |
 
 ## Demo users (dev mode)
 

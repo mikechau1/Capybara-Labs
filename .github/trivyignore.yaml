@@ -1,0 +1,17 @@
+# Image findings the daily scan (dependency-scan.yml) accepts for now. Card M1-09 owns this file.
+#
+# Add an entry only when the fix has to come from someone else: a new upstream image, or a
+# library bundled inside one. Every entry needs a statement saying why, and an expired_at date
+# no more than about six weeks out. When that date passes, the finding fails the scan again: if
+# a fixed image exists by then, bump to it and delete the entry; if not, move the date on.
+
+#
+# The api and ui images install Debian's security fixes at build time (see their Dockerfiles),
+# so findings in their Debian packages should never need an entry here.
+
+vulnerabilities:
+  - id: CVE-2026-102554
+    statement: >-
+      Denial of service in Guava 33.6.0, bundled inside Keycloak 26.8.2 (fixed in 33.7.2). Only a
+      Keycloak release can update it. Keycloak runs only for local sign-in, so a DoS is low risk.
+    expired_at: 2026-12-31
