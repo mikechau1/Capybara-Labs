@@ -143,39 +143,44 @@ APP_ROLE = "capybara_app"
 _LOGIN_PROBLEMS = text(
     """
     WITH log AS (SELECT to_regclass('public.audit_events') AS oid),
-         me AS (SELECT * FROM pg_roles WHERE rolname = session_user),
-         reachable AS (SELECT r.oid, r.rolname, r.rolsuper FROM pg_roles r
-                       WHERE pg_has_role(session_user, r.oid, 'MEMBER'))
+         -- Every role the login can act as: itself, inherited roles, and roles it may SET ROLE
+         -- to. Each is checked, since a right one of them holds is a right the login can use.
+         reachable AS (SELECT r.oid, r.rolname, r.rolsuper, r.rolcreaterole, r.rolcreatedb,
+                              r.rolreplication, r.rolbypassrls
+                       FROM pg_roles r WHERE pg_has_role(session_user, r.oid, 'MEMBER'))
     SELECT
         (SELECT oid FROM log) IS NULL,
-        array_remove(ARRAY[
-            CASE WHEN me.rolsuper THEN 'is a superuser' END,
-            CASE WHEN me.rolcreaterole THEN 'has CREATEROLE' END,
-            CASE WHEN me.rolcreatedb THEN 'has CREATEDB' END,
-            CASE WHEN me.rolreplication THEN 'has REPLICATION' END,
-            CASE WHEN me.rolbypassrls THEN 'has BYPASSRLS' END,
-            CASE WHEN has_database_privilege(session_user, current_database(), 'CREATE')
-                 THEN 'may create schemas in the database' END,
-            CASE WHEN has_database_privilege(session_user, current_database(), 'TEMPORARY')
-                 THEN 'may create temporary tables' END,
-            CASE WHEN (SELECT oid FROM log) IS NOT NULL
-                      AND has_any_column_privilege(session_user, (SELECT oid FROM log), 'UPDATE')
-                 THEN 'may update audit_events columns' END
-        ], NULL)
+        array(SELECT r.rolname || ' ' || v.what
+              FROM reachable r, log, LATERAL (VALUES
+                  (r.rolsuper, 'is a superuser'),
+                  (r.rolcreaterole, 'has CREATEROLE'),
+                  (r.rolcreatedb, 'has CREATEDB'),
+                  (r.rolreplication, 'has REPLICATION'),
+                  (r.rolbypassrls, 'has BYPASSRLS'),
+                  (has_database_privilege(r.oid, current_database(), 'CREATE'),
+                   'may create schemas in the database'),
+                  (has_database_privilege(r.oid, current_database(), 'TEMPORARY'),
+                   'may create temporary tables'),
+                  (log.oid IS NOT NULL AND has_any_column_privilege(r.oid, log.oid, 'UPDATE'),
+                   'may update audit_events columns')
+              ) AS v(bad, what)
+              WHERE v.bad
+              ORDER BY 1)
         || array(SELECT 'is also ' || rolname FROM reachable
                  WHERE rolname NOT IN (session_user, :app_role) ORDER BY rolname)
-        || array(SELECT 'may create objects in schema ' || nspname FROM pg_namespace
-                 WHERE has_schema_privilege(session_user, oid, 'CREATE')
-                   AND nspname NOT LIKE 'pg\\_temp\\_%' AND nspname NOT LIKE 'pg\\_toast\\_temp\\_%'
-                 ORDER BY nspname)
+        || array(SELECT r.rolname || ' may create objects in schema ' || n.nspname
+                 FROM reachable r, pg_namespace n
+                 WHERE has_schema_privilege(r.oid, n.oid, 'CREATE')
+                   AND n.nspname NOT LIKE 'pg\\_temp\\_%'
+                   AND n.nspname NOT LIKE 'pg\\_toast\\_temp\\_%'
+                 ORDER BY 1)
         || array(SELECT 'sees a second audit_events in schema ' || n.nspname
                  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
                  WHERE c.relname = 'audit_events' AND c.oid <> (SELECT oid FROM log)
                  ORDER BY n.nspname)
         || array(SELECT 'can act as ' || r.rolname || ', which can change audit_events'
                  FROM reachable r, log
-                 WHERE r.rolsuper
-                    OR r.oid = (SELECT relowner FROM pg_class WHERE oid = log.oid)
+                 WHERE r.oid = (SELECT relowner FROM pg_class WHERE oid = log.oid)
                     OR r.oid = (SELECT n.nspowner FROM pg_class c
                                 JOIN pg_namespace n ON n.oid = c.relnamespace
                                 WHERE c.oid = log.oid)
@@ -183,7 +188,6 @@ _LOGIN_PROBLEMS = text(
                                  JOIN pg_proc p ON p.oid = t.tgfoid WHERE t.tgrelid = log.oid)
                     OR has_table_privilege(r.oid, log.oid, 'UPDATE, DELETE, TRUNCATE, TRIGGER')
                  ORDER BY r.rolname)
-    FROM me
     """
 ).bindparams(app_role=APP_ROLE)
 

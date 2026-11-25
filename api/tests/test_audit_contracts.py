@@ -459,3 +459,48 @@ def test_the_test_environment_default_works_when_a_test_runs_alone():
         env=env,
     )
     assert result.returncode == 0, result.stdout[-2000:]
+
+
+# Rights the login can only use after SET ROLE count too
+
+
+@pytest.mark.parametrize(
+    ("setup", "undo"),
+    [
+        (
+            _ON_THIS_DATABASE.format(privilege="TEMPORARY").replace("{role}", "capybara_app"),
+            (
+                "DO $$ BEGIN EXECUTE 'REVOKE TEMPORARY ON DATABASE '"
+                " || quote_ident(current_database()) || ' FROM capybara_app'; END $$",
+            ),
+        ),
+        ("ALTER ROLE capybara_app CREATEROLE", ("ALTER ROLE capybara_app NOCREATEROLE",)),
+        (
+            "GRANT CREATE ON SCHEMA public TO capybara_app",
+            ("REVOKE CREATE ON SCHEMA public FROM capybara_app",),
+        ),
+    ],
+)
+def test_a_right_of_the_app_role_is_refused_even_without_inheritance(login, setup, undo):
+    # A NOINHERIT member only gets capybara_app's rights after SET ROLE, but it can do that.
+    assert _refused(login(setup, undo=undo, inherit=False))
+
+
+def test_printed_upgrade_sql_runs_on_an_empty_database(scratch_engine):  # noqa: F811
+    engine, config = scratch_engine
+    sql = _offline_sql(config, "upgrade", "head")
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        raw = conn.connection.driver_connection  # no placeholder parsing, as with psql
+        raw.execute(sql)
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0004"
+        conn.execute(
+            text(
+                "INSERT INTO audit_events (type, user_id, user_department, user_role)"
+                " VALUES ('chat', 'u-1', 'engineering', 'member')"
+            )
+        )
+        down = _offline_sql(config, "downgrade", "0004:0003")
+        with pytest.raises(Exception, match="audit_events holds events"):
+            raw.execute(down)
+        raw.execute("ROLLBACK")  # the printed SQL opened its own transaction
+        assert conn.scalar(text("SELECT count(*) FROM audit_events")) == 1

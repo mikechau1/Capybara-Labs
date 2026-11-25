@@ -126,7 +126,7 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE FUNCTION audit_events_append_only() RETURNS trigger LANGUAGE plpgsql
-            SET search_path = pg_catalog, public AS $$
+            SET search_path = pg_catalog, public, pg_temp AS $$
         BEGIN
             RAISE EXCEPTION 'audit_events is append-only: % is not allowed', TG_OP
                 USING ERRCODE = 'insufficient_privilege';
@@ -145,7 +145,7 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE FUNCTION audit_events_stamp_time() RETURNS trigger LANGUAGE plpgsql
-            SET search_path = pg_catalog, public AS $$
+            SET search_path = pg_catalog, public, pg_temp AS $$
         BEGIN
             -- Qualified, and a fixed search_path above: a clock_timestamp() of the caller's own
             -- earlier on their search_path must not be able to choose the time.
@@ -193,6 +193,11 @@ def upgrade() -> None:
         "DO $$ BEGIN EXECUTE 'REVOKE TEMPORARY ON DATABASE ' || quote_ident(current_database())"
         " || ' FROM PUBLIC'; END $$"
     )
+    # PostgreSQL 15+ already denies this; clusters created on 14 or older (or upgraded from
+    # one) still let everyone create objects in public, e.g. a function that shadows a
+    # built-in. Revoked here so every cluster matches what check_app_login expects. Not
+    # restored on downgrade: no supported version needs it.
+    op.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
 
 
 def downgrade() -> None:
