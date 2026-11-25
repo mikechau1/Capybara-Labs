@@ -27,5 +27,13 @@ def test_stub_endpoints_answer_501(client):
 
 
 def test_dev_auth_refused_in_production():
-    with pytest.raises(ValidationError):
-        Settings(environment="production", auth_mode="dev")
+    with pytest.raises(ValidationError, match="AUTH_MODE=dev"):
+        # embedder="local" explicitly: the test run sets EMBEDDER=fake, which production also
+        # refuses, and would make this pass even without the auth guard.
+        Settings(environment="production", auth_mode="dev", embedder="local")
+
+
+def test_a_valid_production_configuration_is_accepted():
+    """So the refusals above are each about their own setting, not something global."""
+    settings = Settings(environment="production", auth_mode="oidc", embedder="local")
+    assert settings.environment == "production"

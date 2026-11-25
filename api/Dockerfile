@@ -13,7 +13,8 @@ RUN pip install --no-cache-dir --no-deps -r requirements-lock.txt \
     && pip check
 
 # Download the model now, at an exact revision, so the API never downloads at run time and
-# every build produces the same vectors. Must match MODEL_REVISION in app/shared/embeddings.py
+# every build produces the same vectors. The revision below must match MODEL_REVISION in
+# app/shared/embeddings.py
 # (tests/test_embeddings.py checks).
 ENV HF_HOME=/srv/models \
     HF_HUB_DISABLE_PROGRESS_BARS=1 \
@@ -22,8 +23,11 @@ ENV HF_HOME=/srv/models \
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', revision='1110a243fdf4706b3f48f1d95db1a4f5529b4d41')"
 ENV HF_HUB_OFFLINE=1
 
+# The app itself, without letting pip add or change anything: its dependencies are already
+# installed from the lock (a test checks pyproject.toml agrees with it), and setuptools comes
+# from the lock too instead of a fresh download. pip check fails the build if anything is off.
 COPY pyproject.toml .
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --no-deps --no-build-isolation . && pip check
 
 COPY app ./app
 COPY alembic.ini .

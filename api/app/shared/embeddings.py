@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 # Exact model version. Changing it changes every vector: re-embed all chunks. Must match the
-# MODEL_REVISION build argument in api/Dockerfile (tests/test_embeddings.py checks).
+# revision in api/Dockerfile's model download step (tests/test_embeddings.py checks).
 MODEL_REVISION = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
 EMBEDDING_DIMENSIONS = 384  # must match the chunks.embedding column (card M2-01)
 
@@ -47,6 +47,8 @@ MAX_INPUT_TOKENS = 254
 # At most this many encodes run at once. More in parallel are no faster on a CPU but each holds
 # its own working memory (40 simultaneous calls reached 3.2 GB in a review); extra callers wait.
 _ENCODE_SLOTS = threading.BoundedSemaphore(2)
+# Held by calls longer than one batch; see LocalEmbedder.embed.
+_BULK = threading.Lock()
 
 
 class Embedder(Protocol):
@@ -63,6 +65,9 @@ class Embedder(Protocol):
 
 
 def _refuse_blank(texts: list[str]) -> None:
+    if isinstance(texts, str):
+        # A string is a sequence too: it would be embedded one character at a time.
+        raise TypeError("embed takes a list of texts; wrap a single text in a list")
     if any(not text.strip() for text in texts):
         raise ValueError("cannot embed blank text; drop empty chunks first")
 
@@ -108,15 +113,27 @@ class LocalEmbedder:
                 "embedding input cut off at the model's limit",
                 extra={"texts_cut": len(too_long), "longest_tokens": max(too_long)},
             )
-        with _ENCODE_SLOTS:
-            vectors = self._model.encode(
-                texts,
-                batch_size=self._batch_size,
-                normalize_embeddings=True,
-                convert_to_numpy=True,
-                show_progress_bar=False,
-            )
-        return vectors.tolist()
+        if len(texts) <= self._batch_size:
+            with _ENCODE_SLOTS:
+                return self._encode(texts)
+        # A long call (ingestion) runs one batch at a time and only one such call at a time, so
+        # at least one slot is always free for short calls (chat queries): they wait for at most
+        # one batch, never for a whole document. Peak memory is still two encodes.
+        vectors: list[list[float]] = []
+        with _BULK:
+            for start in range(0, len(texts), self._batch_size):
+                with _ENCODE_SLOTS:
+                    vectors.extend(self._encode(texts[start : start + self._batch_size]))
+        return vectors
+
+    def _encode(self, texts: list[str]) -> list[list[float]]:
+        return self._model.encode(
+            texts,
+            batch_size=self._batch_size,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        ).tolist()
 
 
 _WORD = re.compile(r"[^\W_]+")

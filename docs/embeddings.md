@@ -45,9 +45,9 @@ docker run --rm -v "$PWD/api/tests:/srv/tests:ro" --entrypoint sh capybara-labs-
 
 ## Changing the model or its packages later
 
-Every package in the image is pinned in `api/requirements-lock.txt` (including everything the model pulls in, such as `regex` and `safetensors`, which affect tokenizing and loading), and the base image is pinned by digest. The Dockerfile installs exactly the lock (`--no-deps`) and runs `pip check`. The `embeddings` extra in `api/pyproject.toml`, for installs outside Docker, must use the same versions (a test checks). `api/requirements-lock.txt` explains how to regenerate it. A golden-vector test (inside the image) fails if anything changes the model's output.
+Every package in the image is pinned in `api/requirements-lock.txt` (including everything the model pulls in, such as `regex` and `safetensors`, which affect tokenizing and loading), and the base image is pinned by digest. The Dockerfile installs exactly the lock (`--no-deps`), then the app itself without dependencies (also `--no-deps`), and runs `pip check`. Every dependency in `api/pyproject.toml`, the app's own and the `embeddings` extra (for installs outside Docker), must be in the lock at the same version (a test checks), so adding a package means adding it to the lock too. `api/requirements-lock.txt` explains how to regenerate it. A golden-vector test (inside the image) fails if anything changes the model's output.
 
-A new model or revision changes every vector: update `MODEL_REVISION` in `api/app/shared/embeddings.py` and the `MODEL_REVISION` build argument in `api/Dockerfile` together, then re-embed every chunk. A different vector size also needs a migration changing `chunks.embedding` (card M2-01) and `EMBEDDING_DIMENSIONS` in both places.
+A new model or revision changes every vector: update `MODEL_REVISION` in `api/app/shared/embeddings.py` and the revision in `api/Dockerfile`'s model download step together (a test checks they match), then re-embed every chunk. A different vector size also needs a migration changing `chunks.embedding` (card M2-01) and `EMBEDDING_DIMENSIONS` in both places.
 
 ## Open questions for later cards
 

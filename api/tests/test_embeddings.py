@@ -85,14 +85,22 @@ def _lock() -> dict[str, str]:
     return pins
 
 
-def test_every_embedding_package_matches_the_lock():
+def test_every_declared_package_matches_the_lock():
+    """The image installs the lock and nothing else, so every dependency in pyproject.toml (the
+    app's own and the embeddings extra) must be in the lock at the same version."""
     lock = _lock()
-    extra = tomllib.loads((API / "pyproject.toml").read_text(encoding="utf-8"))["project"][
-        "optional-dependencies"
-    ]["embeddings"]
-    for requirement in extra:
+    project = tomllib.loads((API / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    declared = project["dependencies"] + project["optional-dependencies"]["embeddings"]
+    for requirement in declared:
+        requirement = requirement.split(";")[0].strip()
+        name, sep, version = requirement.partition("==")
+        assert sep, f"not an exact pin in pyproject.toml: {requirement}"
+        name = name.split("[")[0]
+        assert name.lower().replace("_", "-") in lock, f"{name} is not in requirements-lock.txt"
+    for requirement in declared:
+        requirement = requirement.split(";")[0].strip()
         name, _, version = requirement.partition("==")
-        locked = lock[name.lower().replace("_", "-")]
+        locked = lock[name.split("[")[0].lower().replace("_", "-")]
         assert locked.split("+")[0] == version, f"{name}: extra {version}, lock {locked}"
     assert lock["torch"].endswith("+cpu")  # never the GPU build
 
@@ -173,7 +181,7 @@ def test_simultaneous_first_calls_create_one_embedder(use_embedder, monkeypatch)
 def test_embedder_setting_rejects_unknown_values_and_the_fake_in_production():
     with pytest.raises(ValueError):
         Settings(embedder="openai")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="EMBEDDER=fake"):
         Settings(environment="production", embedder="fake", auth_mode="oidc")
 
 
@@ -271,3 +279,56 @@ def test_local_model_gives_the_same_vectors_as_when_pinned(local: LocalEmbedder)
     vector = local.embed(["hello world"])[0]
     expected = [-0.034477, 0.031023, 0.006735, 0.026109, -0.039362]
     assert all(math.isclose(v, e, abs_tol=1e-4) for v, e in zip(vector[:5], expected, strict=True))
+
+
+def _timed_embedder(batch_seconds: float) -> LocalEmbedder:
+    class SlowModel:
+        def encode(self, texts, **kwargs):
+            time.sleep(batch_seconds * math.ceil(len(texts) / 2))  # per batch of 2
+            return _Vectors(len(texts))
+
+    embedder = object.__new__(LocalEmbedder)
+    embedder._model = SlowModel()
+    embedder._batch_size = 2
+    embedder.count_tokens = lambda text: 1
+    return embedder
+
+
+def test_a_query_never_waits_behind_long_ingestion_calls():
+    """Two long calls (4 batches each) must leave a slot free: a one-text query waits for at
+    most one batch, not for 8."""
+    embedder = _timed_embedder(0.1)
+    bulk = [threading.Thread(target=embedder.embed, args=(["x"] * 8,)) for _ in range(2)]
+    for t in bulk:
+        t.start()
+    time.sleep(0.05)
+    started = time.monotonic()
+    embedder.embed(["query"])
+    waited = time.monotonic() - started
+    for t in bulk:
+        t.join()
+    assert waited < 0.35, f"the query waited {waited:.2f}s"
+
+
+def test_a_long_call_returns_every_vector_in_order():
+    embedder = object.__new__(LocalEmbedder)
+
+    class Echo:
+        def encode(self, texts, **kwargs):
+            class V:
+                def tolist(self_inner):
+                    return [[float(t)] + [0.0] * (EMBEDDING_DIMENSIONS - 1) for t in texts]
+
+            return V()
+
+    embedder._model = Echo()
+    embedder._batch_size = 3
+    embedder.count_tokens = lambda text: 1
+    texts = [str(i) for i in range(10)]
+    assert [v[0] for v in embedder.embed(texts)] == [float(i) for i in range(10)]
+
+
+@pytest.mark.parametrize("make", [FakeEmbedder, lambda: _timed_embedder(0)])
+def test_a_plain_string_is_refused(make):
+    with pytest.raises(TypeError, match="list of texts"):
+        make().embed("vendor payments")
