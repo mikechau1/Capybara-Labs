@@ -136,7 +136,12 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE FUNCTION grants_only_revoke() RETURNS trigger LANGUAGE plpgsql
-            SET search_path = pg_catalog, public AS $$
+            SET search_path = pg_catalog, public, pg_temp AS $$
+        DECLARE
+            generated text[] := ARRAY(
+                SELECT attname::text FROM pg_attribute
+                WHERE attrelid = TG_RELID AND attnum > 0 AND attgenerated <> ''
+            );
         BEGIN
             IF TG_OP IN ('DELETE', 'TRUNCATE') THEN
                 RAISE EXCEPTION 'grants are never deleted; revoke instead'
@@ -146,16 +151,20 @@ def upgrade() -> None:
                 RAISE EXCEPTION 'grant % is already revoked', OLD.id
                     USING ERRCODE = 'check_violation';
             END IF;
-            -- Every column except revoked_at, including any a later migration adds.
+            -- Every column except revoked_at, including any a later migration adds. Generated
+            -- columns are left out: in a BEFORE trigger they are still NULL in NEW.
             IF NEW.revoked_at IS NULL
-               OR to_jsonb(NEW) - 'revoked_at' IS DISTINCT FROM to_jsonb(OLD) - 'revoked_at'
+               OR to_jsonb(NEW) - 'revoked_at' - generated IS DISTINCT FROM
+                  to_jsonb(OLD) - 'revoked_at' - generated
             THEN
                 RAISE EXCEPTION 'a grant can only be revoked, never changed'
                     USING ERRCODE = 'check_violation';
             END IF;
-            -- The revoke time is the database's, whatever the caller sent: never backdated,
-            -- never in the future, never before creation.
-            NEW.revoked_at := now();
+            -- The revoke time is the database's, whatever the caller sent: never backdated or in
+            -- the future. now() is the transaction's start, which can be before the grant was
+            -- created (a long job revoking a grant committed after it began), so never earlier
+            -- than created_at.
+            NEW.revoked_at := GREATEST(now(), OLD.created_at);
             RETURN NEW;
         END $$
         """
@@ -171,7 +180,7 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE FUNCTION grants_stamp_created() RETURNS trigger LANGUAGE plpgsql
-            SET search_path = pg_catalog, public AS $$
+            SET search_path = pg_catalog, public, pg_temp AS $$
         BEGIN
             -- The database's clock, so a grant can't be backdated or start in the future.
             NEW.created_at := now();

@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, StringConstraints, model_validator
+from pydantic import AfterValidator, AwareDatetime, BaseModel, StringConstraints, model_validator
 
 from app.shared.types import Role, Sensitivity, SourceType
 
@@ -13,8 +13,21 @@ from app.shared.types import Role, Sensitivity, SourceType
 # "Whitespace" is exactly space, tab, newline, CR, form feed and vertical tab, written out the
 # same way in the CHECKs (PostgreSQL's and Python's \s disagree on Unicode spaces).
 NonBlank = Annotated[str, StringConstraints(pattern=r"^[^ \t\n\r\f\v](?:[\s\S]*[^ \t\n\r\f\v])?$")]
-# Department ids, as departments.id_is_slug enforces; "any" is mapped to None before this.
-DepartmentId = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]*$")]
+
+
+def _not_any(value: str) -> str:
+    if value == ANY:
+        raise ValueError('"any" is not a department id')
+    return value
+
+
+# Department ids, as departments.id_is_slug and its column enforce. GrantCreate maps "any" to
+# None before this runs, so "any" only reaches here where it can't mean every department.
+DepartmentId = Annotated[
+    str,
+    StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]*$", max_length=50),
+    AfterValidator(_not_any),
+]
 ANY = "any"  # what an API caller sends to mean "any department" or "any source type"
 EXPIRY_MARGIN = timedelta(minutes=5)
 
