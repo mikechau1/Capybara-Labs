@@ -13,8 +13,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.modules.policies import schemas, service
-from app.modules.policies.schemas import Grant, GrantCreate
-from app.modules.policies.scope import Scope, resolve_scope
+from app.modules.policies.schemas import (
+    AccessRequestCreate,
+    AccessRequestDecision,
+    Grant,
+    GrantCreate,
+)
+from app.modules.policies.scope import Scope, grant_is_active, grant_matches, resolve_scope
 from app.shared.types import Pool, Principal, Role, Sensitivity, SourceType
 from tests import factories as make
 
@@ -244,3 +249,68 @@ def _fixed_scope() -> Scope:
         for t in SourceType
     ]
     return Scope(pools=pools, pool_grants={pools[0]: frozenset({"g-b", "g-a", "g-c"})})
+
+
+@pytest.mark.parametrize(
+    "value", ["u-1", " u-1", "u-1\t", "\xa0u-1", "u-1\x85", "\u2003u", "u\nv", "u-1\n", ""]
+)
+def test_the_database_and_the_schema_agree_on_every_id(db: Session, value: str):
+    """Same answer from both layers for ordinary, ASCII-padded and Unicode-padded ids."""
+    try:
+        GrantCreate.model_validate(
+            _request(grantee_department=None, grantee_min_role=None, grantee_user_id=value)
+        )
+        schema_accepts = True
+    except ValidationError:
+        schema_accepts = False
+    make.department(db, "finance")
+    try:
+        with db.begin_nested():
+            db.execute(text(_INSERTS["user_id_not_empty"]), {"v": value})
+        database_accepts = True
+    except IntegrityError:
+        database_accepts = False
+    assert schema_accepts == database_accepts, (value, schema_accepts, database_accepts)
+
+
+@pytest.mark.parametrize("department", ["Any", "ANY", " engineering", "Engineering", "fin ance"])
+def test_a_grantee_department_must_be_a_department_id(department):
+    with pytest.raises(ValidationError):
+        GrantCreate.model_validate(_request(grantee_department=department))
+
+
+def test_access_requests_use_department_ids_and_aware_times():
+    with pytest.raises(ValidationError):
+        AccessRequestCreate(department="Finance", source_type="docs", justification="why")
+    with pytest.raises(ValidationError):
+        AccessRequestDecision(expires_at=datetime(2030, 1, 1))  # naive
+
+
+def _unchecked(**fields) -> Grant:
+    values = {
+        "id": uuid.uuid4(),
+        "owning_department": "finance",
+        "grantee_department": None,
+        "grantee_min_role": None,
+        "grantee_user_id": None,
+        "source_type": None,
+        "max_sensitivity": Sensitivity.RESTRICTED,
+        "expires_at": None,
+        "created_by": "owner",
+        "created_at": datetime.now(UTC),
+        "revoked_at": None,
+    } | fields
+    return Grant.model_construct(**values)
+
+
+def test_the_pure_rules_fail_closed_on_their_own():
+    """Without the re-validation in resolve_scope, a grantee-less grant still matches nobody and
+    a restricted grant without expiry is still inactive (defence in depth)."""
+    assert not grant_matches(_unchecked(), _person())
+    assert not grant_is_active(_unchecked(), datetime.now(UTC))
+
+
+@pytest.mark.parametrize("pool_grants", [[1], None, "x"])
+def test_scope_pool_grants_must_be_a_mapping(pool_grants):
+    with pytest.raises(ValidationError):
+        Scope.model_validate({"pools": [], "pool_grants": pool_grants})

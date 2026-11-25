@@ -141,11 +141,41 @@ def test_a_revoke_cannot_be_undone_or_repeated(db: Session):
         nested.rollback()
 
 
-def test_an_early_revoke_time_is_moved_up_to_creation(db: Session):
-    # An app clock a little behind the database must not make the revoke fail.
+@pytest.mark.parametrize(
+    "sent", ["created_at - interval '2 seconds'", "now() + interval '10 years'", "'2001-01-01'"]
+)
+def test_the_revoke_time_is_always_the_databases(db: Session, sent: str):
     make.grant(db)
-    db.execute(text("UPDATE grants SET revoked_at = created_at - interval '2 seconds'"))
-    assert db.scalar(text("SELECT revoked_at = created_at FROM grants"))
+    db.execute(text(f"UPDATE grants SET revoked_at = {sent}"))
+    assert db.scalar(text("SELECT revoked_at = now() FROM grants"))
+
+
+@pytest.mark.parametrize("sent", ["now() - interval '20 years'", "now() + interval '20 years'"])
+def test_the_creation_time_is_always_the_databases(db: Session, sent: str):
+    make.department(db, "finance")
+    db.execute(
+        text(
+            "INSERT INTO grants (owning_department, grantee_min_role, max_sensitivity,"
+            f" created_by, created_at) VALUES ('finance', 'member', 'internal', 'me', {sent})"
+        )
+    )
+    assert db.scalar(text("SELECT created_at = now() FROM grants"))
+
+
+def test_a_column_added_later_is_covered_by_the_immutability_trigger(db: Session):
+    db.execute(text("ALTER TABLE grants ADD COLUMN note text"))  # rolled back with the test
+    make.grant(db)
+    with pytest.raises(IntegrityError, match="never changed"):
+        db.execute(text("UPDATE grants SET revoked_at = now(), note = 'rewritten on revoke'"))
+    db.rollback()
+
+
+def test_a_guarded_revoke_of_a_revoked_grant_changes_nothing(db: Session):
+    """The pattern documented for M4-01: a second revoke affects 0 rows instead of failing."""
+    grant = make.grant(db)
+    sql = text("UPDATE grants SET revoked_at = now() WHERE id = :id AND revoked_at IS NULL")
+    assert db.execute(sql, {"id": grant.id}).rowcount == 1
+    assert db.execute(sql, {"id": grant.id}).rowcount == 0
 
 
 def test_scope_for_refuses_an_unknown_department(db: Session):

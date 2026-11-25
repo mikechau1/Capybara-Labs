@@ -270,7 +270,8 @@ def upgrade() -> None:
     # which SQLAlchemy's onupdate= does not cover.
     op.execute(
         """
-        CREATE FUNCTION set_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$
+        CREATE FUNCTION set_updated_at() RETURNS trigger LANGUAGE plpgsql
+            SET search_path = pg_catalog, public AS $$
         BEGIN
             -- An UPDATE that changes nothing (e.g. a sync re-writing the same values) keeps
             -- the old stamp, so updated_at means "last real change".
@@ -296,8 +297,15 @@ def upgrade() -> None:
 def _tombstone_triggers() -> None:
     op.execute(
         """
-        CREATE FUNCTION documents_delete_chunks() RETURNS trigger LANGUAGE plpgsql AS $$
+        CREATE FUNCTION documents_delete_chunks() RETURNS trigger LANGUAGE plpgsql
+            SET search_path = pg_catalog, public AS $$
         BEGIN
+            -- Under REPEATABLE READ or SERIALIZABLE this DELETE would run on the transaction's
+            -- old snapshot and miss a chunk committed while it waited for that chunk's lock.
+            IF current_setting('transaction_isolation') <> 'read committed' THEN
+                RAISE EXCEPTION 'mark documents deleted only at READ COMMITTED isolation'
+                    USING ERRCODE = 'object_not_in_prerequisite_state';
+            END IF;
             DELETE FROM chunks WHERE document_id = NEW.id;
             RETURN NEW;
         END $$
@@ -310,7 +318,8 @@ def _tombstone_triggers() -> None:
     )
     op.execute(
         """
-        CREATE FUNCTION chunks_refuse_deleted_document() RETURNS trigger LANGUAGE plpgsql AS $$
+        CREATE FUNCTION chunks_refuse_deleted_document() RETURNS trigger LANGUAGE plpgsql
+            SET search_path = pg_catalog, public AS $$
         BEGIN
             -- FOR SHARE: a concurrent "mark deleted" either waits for this chunk's transaction
             -- (and its trigger then removes the chunk) or finishes first and is seen here.

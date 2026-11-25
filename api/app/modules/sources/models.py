@@ -17,7 +17,9 @@ sensitivity updates every copy in the same statement. Retrieval can trust the ch
 
 Deleted items (enforced by triggers in migration 0002): setting `documents.deleted` deletes the
 document's chunks, and inserting a chunk into a deleted document is refused. So a tombstoned
-item is never searchable.
+item is never searchable. This holds for concurrent transactions too, as long as documents are
+marked deleted at READ COMMITTED (PostgreSQL's default); at any stricter isolation level the
+trigger refuses, because its cleanup would miss chunks committed meanwhile.
 
 Other rules for the ingestion pipeline (card M2-04):
 - Department ids are permanent slugs; do not rename them.
@@ -27,6 +29,12 @@ Other rules for the ingestion pipeline (card M2-04):
   content hash is unchanged.
 - Re-chunking a document means deleting all its chunks, then inserting the new ones; shifting
   positions in place hits the (document_id, position) unique constraint.
+- Lock the document row first (`SELECT ... FOR NO KEY UPDATE`, or update it) before replacing
+  its chunks. That serialises two workers re-chunking the same document, and avoids a deadlock:
+  each chunk insert takes a share lock on the document, so two workers that insert chunks and
+  then update the document deadlock (one fails; nothing is lost, but it must be retried).
+- `Source.config` is a MutableDict: assigning a key is saved, but changing a nested value in
+  place (`config["channel_ids"].append(x)`) is not; assign the whole value again.
 - Chunk text should stay under ~200 words (the embedding model's input limit, card M2-03).
 - Embeddings are unit length, so search should use cosine distance (`<=>`), and only
   over chunks whose `embedding_model` is the current embedder's `model_id`. There is no
