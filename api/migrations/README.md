@@ -6,13 +6,7 @@ Each file in `versions/` is one step that changes the database structure. They r
 
 `docker compose up` does it for you: the `migrate` service runs `alembic upgrade head` and exits, and the API starts only after it succeeds. If the API won't start, check `docker compose logs migrate`.
 
-Migrations are copied into the image when it is built, so after pulling a teammate's new migration, rebuild: `docker compose up --build`, or while the stack is running:
-
-```bash
-docker compose run --rm --build migrate
-```
-
-Without `--build`, the old image runs and reports nothing to do.
+Migrations are copied into the image when it is built, so after pulling a teammate's new migration, rebuild and restart: `docker compose up --build`. (Rebuilding only the `migrate` service would leave the API running old code.) Without `--build`, the old image runs and reports nothing to do.
 
 From your machine, with the API's virtual environment active and from the `api/` folder:
 
@@ -47,7 +41,7 @@ Use your `POSTGRES_HOST_PORT` instead of `5432` if you changed it. Other useful 
 
 **Two teammates chose the same number?** Alembic stops with "multiple heads". Whoever merges second renumbers their file, changes `revision` to match the new number, and sets `down_revision` to the number of the migration merged first.
 
-**`alembic check` does not see enum or CHECK changes.** Adding a value to `SourceType`, `Sensitivity`, `Role` or `SYNC_STATUSES` changes a CHECK constraint, which autogenerate ignores. Write that migration by hand (drop and recreate the constraint); `tests/test_migrations.py` fails until you do.
+**`alembic check` does not see enum or CHECK changes.** Adding a value to `SourceType`, `Sensitivity`, `Role` or `SYNC_STATUSES` changes a CHECK constraint, which autogenerate ignores. Write that migration by hand (drop and recreate the constraint); `tests/test_migrations.py` fails until you do. Run it locally (`REQUIRE_TEST_DB=1 pytest`): CI skips database tests until it has a Postgres service (card M1-08).
 
 **New table with `Timestamps`?** Add the `set_updated_at` trigger to it in your migration (copy from `0002`), so `updated_at` also changes on raw SQL and upserts; `tests/test_migrations.py` checks every table has it.
 

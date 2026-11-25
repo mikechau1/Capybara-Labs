@@ -45,6 +45,7 @@ def scratch_engine() -> Iterator[tuple[Engine, Config]]:
             conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
             conn.execute(text(f'CREATE DATABASE "{name}"'))
     except OperationalError as exc:
+        server.dispose()  # skip/fail raise, so close the connection pool first
         _skip_or_fail(f"No test database server: {exc.orig}")
 
     scratch_url = url.set(database=name)

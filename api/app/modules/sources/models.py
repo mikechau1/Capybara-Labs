@@ -57,6 +57,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, Timestamps, enum_column
@@ -106,8 +107,9 @@ class Source(Timestamps, Base):
         enum_column(Sensitivity, "default_sensitivity")
     )
     # Connector settings, e.g. {"folder": "seed/docs/finance"} or {"channel_ids": [...]}.
+    # MutableDict: in-place edits (src.config["folder"] = ...) are saved too.
     config: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, default=dict, server_default=text("'{}'::jsonb")
+        MutableDict.as_mutable(JSONB), default=dict, server_default=text("'{}'::jsonb")
     )
     sync_cursor: Mapped[str | None] = mapped_column(Text)
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
