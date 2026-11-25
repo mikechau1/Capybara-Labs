@@ -128,52 +128,82 @@ def get_engine() -> Engine:
     return engine
 
 
-# Every role the login (session_user, so SET ROLE can't hide it) can act as, directly, by
-# inheritance or by SET ROLE, that could change or bypass the audit log: a superuser; the owner
-# of audit_events, of its schema (who can drop it) or of a trigger function on it (who can
-# replace the function); or a role holding UPDATE, DELETE, TRUNCATE or TRIGGER on it (TRIGGER
-# could add a trigger that silently drops events). pg_write_all_data counts through the
-# privilege check, which also reports every right for a superuser and normally for the owner;
-# rolsuper and ownership are still checked on their own, since an owner can revoke its own
-# rights and still disable the triggers.
-_PRIVILEGED_ROLES = text(
+# What the API's login (session_user, so SET ROLE can't hide it) may be: exactly itself plus the
+# capybara_app group, with no special attributes and no way to create anything that could
+# shadow, swallow or bypass audit_events. Checked as an allowlist of that one setup, so any
+# extra right counts, not only the ones listed here as examples:
+# - roles: any other membership (the owner, pg_write_all_data, pg_execute_server_program, ...);
+# - attributes: SUPERUSER, CREATEROLE, CREATEDB, REPLICATION, BYPASSRLS;
+# - CREATE or TEMPORARY on the database, CREATE on any schema (a schema or temp table named
+#   audit_events earlier on the search_path would swallow every event), or another relation
+#   named audit_events anywhere;
+# - owning audit_events, its schema or a trigger function on it, or holding UPDATE, DELETE,
+#   TRUNCATE or TRIGGER on it, or UPDATE on any of its columns.
+APP_ROLE = "capybara_app"
+_LOGIN_PROBLEMS = text(
     """
-    WITH log AS (SELECT to_regclass('public.audit_events') AS oid)
-    SELECT (SELECT oid FROM log) IS NULL,
-           array(
-               SELECT r.rolname FROM pg_roles r, log
-               WHERE pg_has_role(session_user, r.oid, 'MEMBER')
-                 AND (r.rolsuper
-                      OR r.oid = (SELECT relowner FROM pg_class WHERE oid = log.oid)
-                      OR r.oid = (SELECT n.nspowner FROM pg_class c
-                                  JOIN pg_namespace n ON n.oid = c.relnamespace
-                                  WHERE c.oid = log.oid)
-                      OR r.oid IN (SELECT p.proowner FROM pg_trigger t
-                                   JOIN pg_proc p ON p.oid = t.tgfoid
-                                   WHERE t.tgrelid = log.oid)
-                      OR has_table_privilege(r.oid, log.oid, 'UPDATE, DELETE, TRUNCATE, TRIGGER'))
-               ORDER BY r.rolname
-           )
+    WITH log AS (SELECT to_regclass('public.audit_events') AS oid),
+         me AS (SELECT * FROM pg_roles WHERE rolname = session_user),
+         reachable AS (SELECT r.oid, r.rolname, r.rolsuper FROM pg_roles r
+                       WHERE pg_has_role(session_user, r.oid, 'MEMBER'))
+    SELECT
+        (SELECT oid FROM log) IS NULL,
+        array_remove(ARRAY[
+            CASE WHEN me.rolsuper THEN 'is a superuser' END,
+            CASE WHEN me.rolcreaterole THEN 'has CREATEROLE' END,
+            CASE WHEN me.rolcreatedb THEN 'has CREATEDB' END,
+            CASE WHEN me.rolreplication THEN 'has REPLICATION' END,
+            CASE WHEN me.rolbypassrls THEN 'has BYPASSRLS' END,
+            CASE WHEN has_database_privilege(session_user, current_database(), 'CREATE')
+                 THEN 'may create schemas in the database' END,
+            CASE WHEN has_database_privilege(session_user, current_database(), 'TEMPORARY')
+                 THEN 'may create temporary tables' END,
+            CASE WHEN (SELECT oid FROM log) IS NOT NULL
+                      AND has_any_column_privilege(session_user, (SELECT oid FROM log), 'UPDATE')
+                 THEN 'may update audit_events columns' END
+        ], NULL)
+        || array(SELECT 'is also ' || rolname FROM reachable
+                 WHERE rolname NOT IN (session_user, :app_role) ORDER BY rolname)
+        || array(SELECT 'may create objects in schema ' || nspname FROM pg_namespace
+                 WHERE has_schema_privilege(session_user, oid, 'CREATE')
+                   AND nspname NOT LIKE 'pg\\_temp\\_%' AND nspname NOT LIKE 'pg\\_toast\\_temp\\_%'
+                 ORDER BY nspname)
+        || array(SELECT 'sees a second audit_events in schema ' || n.nspname
+                 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE c.relname = 'audit_events' AND c.oid <> (SELECT oid FROM log)
+                 ORDER BY n.nspname)
+        || array(SELECT 'can act as ' || r.rolname || ', which can change audit_events'
+                 FROM reachable r, log
+                 WHERE r.rolsuper
+                    OR r.oid = (SELECT relowner FROM pg_class WHERE oid = log.oid)
+                    OR r.oid = (SELECT n.nspowner FROM pg_class c
+                                JOIN pg_namespace n ON n.oid = c.relnamespace
+                                WHERE c.oid = log.oid)
+                    OR r.oid IN (SELECT p.proowner FROM pg_trigger t
+                                 JOIN pg_proc p ON p.oid = t.tgfoid WHERE t.tgrelid = log.oid)
+                    OR has_table_privilege(r.oid, log.oid, 'UPDATE, DELETE, TRUNCATE, TRIGGER')
+                 ORDER BY r.rolname)
+    FROM me
     """
-)
+).bindparams(app_role=APP_ROLE)
 
 
 def check_app_login(connection: Connection) -> None:
-    """Refuse a login that could change the audit log (see `_PRIVILEGED_ROLES`).
+    """Refuse a login that is anything more than the limited app login (see `_LOGIN_PROBLEMS`).
 
     The API must connect as its limited login (DATABASE_URL, see infra/postgres/README.md). An
-    old .env pointing at the owner would otherwise run silently, relying only on triggers that
-    the owner or a superuser can switch off.
+    old .env pointing at the owner, or a login given extra rights, would otherwise run
+    silently, relying only on triggers that the owner or a superuser can switch off.
     """
-    missing, roles = connection.execute(_PRIVILEGED_ROLES).one()
+    missing, problems = connection.execute(_LOGIN_PROBLEMS).one()
     if missing:
         raise RuntimeError("The audit_events table doesn't exist: run the migrations first.")
-    if roles:
+    if problems:
         raise RuntimeError(
-            f"The API's database login can act as {', '.join(roles)}, which can change the "
-            "audit log (a superuser, an owner, or UPDATE, DELETE, TRUNCATE or TRIGGER rights). "
-            "Set DATABASE_URL to the limited app login (copy .env.example to .env, then "
-            "docker compose down -v). See infra/postgres/README.md."
+            "The API's database login can change the audit log or get around it: it "
+            f"{'; '.join(problems)}. Set DATABASE_URL to the limited app login, a member of "
+            f"{APP_ROLE} only (copy .env.example to .env, then docker compose down -v). "
+            "See infra/postgres/README.md."
         )
 
 

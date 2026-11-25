@@ -125,7 +125,8 @@ def upgrade() -> None:
 
     op.execute(
         """
-        CREATE FUNCTION audit_events_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+        CREATE FUNCTION audit_events_append_only() RETURNS trigger LANGUAGE plpgsql
+            SET search_path = pg_catalog, public AS $$
         BEGIN
             RAISE EXCEPTION 'audit_events is append-only: % is not allowed', TG_OP
                 USING ERRCODE = 'insufficient_privilege';
@@ -143,9 +144,12 @@ def upgrade() -> None:
 
     op.execute(
         """
-        CREATE FUNCTION audit_events_stamp_time() RETURNS trigger LANGUAGE plpgsql AS $$
+        CREATE FUNCTION audit_events_stamp_time() RETURNS trigger LANGUAGE plpgsql
+            SET search_path = pg_catalog, public AS $$
         BEGIN
-            NEW.at := clock_timestamp();
+            -- Qualified, and a fixed search_path above: a clock_timestamp() of the caller's own
+            -- earlier on their search_path must not be able to choose the time.
+            NEW.at := pg_catalog.clock_timestamp();
             RETURN NEW;
         END $$
         """
@@ -186,24 +190,34 @@ def upgrade() -> None:
     # silently swallow every later event on that pooled connection. Only the owner may create
     # temporary tables in this database.
     op.execute(
-        "DO $$ BEGIN EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', "
-        "current_database()); END $$"
+        "DO $$ BEGIN EXECUTE 'REVOKE TEMPORARY ON DATABASE ' || quote_ident(current_database())"
+        " || ' FROM PUBLIC'; END $$"
     )
 
 
 def downgrade() -> None:
     # Dropping audit_events deletes the audit trail. Refuse while it holds events, unless asked
     # explicitly: alembic -x allow_audit_loss=1 downgrade ...
-    if not context.is_offline_mode():
+    allowed = context.get_x_argument(as_dictionary=True).get("allow_audit_loss") == "1"
+    # Lock first, so an event being written right now is either counted or blocked until the
+    # table is gone, never committed into a table that is about to be dropped.
+    op.execute("LOCK TABLE audit_events IN ACCESS EXCLUSIVE MODE")
+    if context.is_offline_mode():
+        if not allowed:  # the printed SQL refuses for itself when it is run
+            op.execute(
+                "DO $$ BEGIN IF EXISTS (SELECT FROM audit_events) THEN RAISE EXCEPTION "
+                "'audit_events holds events; downgrading would delete them'; END IF; END $$"
+            )
+    else:
         rows = op.get_bind().scalar(sa.text("SELECT count(*) FROM audit_events"))
-        if rows and context.get_x_argument(as_dictionary=True).get("allow_audit_loss") != "1":
+        if rows and not allowed:
             raise RuntimeError(
                 f"audit_events holds {rows} events and downgrading would delete them. "
                 "Run with -x allow_audit_loss=1 to do it anyway."
             )
     op.execute(
-        "DO $$ BEGIN EXECUTE format('GRANT TEMPORARY ON DATABASE %I TO PUBLIC', "
-        "current_database()); END $$"
+        "DO $$ BEGIN EXECUTE 'GRANT TEMPORARY ON DATABASE ' || quote_ident(current_database())"
+        " || ' TO PUBLIC'; END $$"
     )
     op.execute(
         "ALTER DEFAULT PRIVILEGES IN SCHEMA public "

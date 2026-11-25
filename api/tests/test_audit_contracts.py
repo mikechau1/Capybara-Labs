@@ -293,3 +293,169 @@ def test_a_database_without_the_audit_log_is_refused(scratch_engine):  # noqa: F
 def test_starting_the_app_in_a_test_does_not_connect():
     with TestClient(create_app()) as client:  # runs the startup hook
         assert client.get("/health").status_code == 200
+
+
+# Round 2: only the expected setup is accepted, whatever extra right a login has
+
+
+_ON_THIS_DATABASE = (
+    "DO $$ BEGIN EXECUTE 'GRANT {privilege} ON DATABASE ' || quote_ident(current_database())"
+    " || ' TO {{role}}'; END $$"
+)
+
+
+@pytest.mark.parametrize(
+    ("setup", "undo"),
+    [
+        (_ON_THIS_DATABASE.format(privilege="TEMPORARY"), ()),  # temp table shadows the log
+        (_ON_THIS_DATABASE.format(privilege="CREATE"), ()),  # "$user" schema shadows the log
+        ("GRANT CREATE ON SCHEMA public TO {role}", ()),  # e.g. its own clock_timestamp()
+        ("GRANT pg_execute_server_program TO {role}", ()),  # COPY ... TO PROGRAM 'psql ...'
+        ("GRANT pg_write_server_files TO {role}", ()),
+        ("GRANT UPDATE (question) ON audit_events TO {role}", ()),  # column-level grant
+        ("ALTER ROLE {role} CREATEDB", ()),
+        ("ALTER ROLE {role} CREATEROLE", ()),
+        ("ALTER ROLE {role} BYPASSRLS", ()),
+        (
+            "CREATE SCHEMA audit_shadow; CREATE TABLE audit_shadow.audit_events (id int)",
+            ("DROP SCHEMA audit_shadow CASCADE",),
+        ),
+    ],
+)
+def test_any_right_beyond_the_app_role_is_refused(login, setup: str, undo: tuple[str, ...]):
+    statements = (
+        [part for part in setup.split("; ")] if setup.startswith("CREATE SCHEMA") else [setup]
+    )
+    assert _refused(login(*statements, undo=undo))
+
+
+def test_the_refusal_names_what_is_wrong(login):
+    engine = login("ALTER ROLE {role} CREATEDB", "GRANT pg_write_server_files TO {role}")
+    with engine.connect() as conn, pytest.raises(RuntimeError) as error:
+        check_app_login(conn)
+    assert "has CREATEDB" in str(error.value) and "is also pg_write_server_files" in str(
+        error.value
+    )
+
+
+def test_the_insert_time_ignores_a_clock_timestamp_on_the_search_path(db: Session):
+    db.execute(text("CREATE SCHEMA fake_clock"))  # rolled back with the test
+    db.execute(
+        text(
+            "CREATE FUNCTION fake_clock.clock_timestamp() RETURNS timestamptz LANGUAGE sql"
+            " AS $$ SELECT timestamptz '2001-01-01' $$"
+        )
+    )
+    db.execute(text("SET LOCAL search_path = fake_clock, pg_catalog, public"))
+    assert db.scalar(text("SELECT clock_timestamp()")).year == 2001  # the trap is armed
+    row = _stored(db, AuditEventCreate.by(ENGINEER, "chat"))
+    assert row.at.year != 2001
+
+
+# Lone surrogates, lengths, values that only become text when dumped
+
+
+def test_lone_surrogates_are_replaced_so_the_request_does_not_fail(db: Session):
+    event = AuditEventCreate.by(
+        ENGINEER, "chat", question="a\ud800b", detail={"reason": "x\udfffy"}
+    )
+    row = _stored(db, event)
+    assert row.question == "a?b" and row.detail == {"reason": "x?y"}
+
+
+@pytest.mark.parametrize("user_id", ["u\ud800", "u" * 256])
+def test_an_id_that_cannot_be_stored_exactly_is_refused(user_id):
+    with pytest.raises(ValidationError):
+        AuditEventCreate.by(ENGINEER.model_copy(update={"user_id": user_id}), "chat")
+
+
+def test_values_that_become_text_only_when_dumped_are_cleaned_too(db: Session):
+    from pydantic import BaseModel
+
+    class Note(BaseModel):
+        text: str
+
+    event = AuditEventCreate.by(
+        ENGINEER, "chat", detail={"raw": b"a\x00b", "note": Note.model_construct(text="c\x00d")}
+    )
+    assert _stored(db, event).detail == {"raw": "ab", "note": {"text": "cd"}}
+
+
+# The downgrade guard
+
+
+def test_downgrade_counts_an_event_that_is_being_written(scratch_engine):  # noqa: F811
+    import threading
+
+    engine, config = scratch_engine
+    command.upgrade(config, "head")
+    writer = engine.connect()
+    transaction = writer.begin()
+    writer.execute(
+        text(
+            "INSERT INTO audit_events (type, user_id, user_department, user_role)"
+            " VALUES ('chat', 'u-1', 'engineering', 'member')"
+        )
+    )
+    outcome: list[object] = []
+
+    def downgrade() -> None:
+        try:
+            command.downgrade(config, "0003")
+            outcome.append("dropped")
+        except RuntimeError as exc:
+            outcome.append(exc)
+
+    other = threading.Thread(target=downgrade)
+    other.start()
+    other.join(1.0)  # waits for the open insert's lock
+    transaction.commit()
+    writer.close()
+    other.join(30)
+    assert outcome and isinstance(outcome[0], RuntimeError), outcome
+    with engine.connect() as conn:
+        assert conn.scalar(text("SELECT count(*) FROM audit_events")) == 1
+
+
+def _offline_sql(config: Config, *args: str) -> str:
+    import io
+
+    buffer = io.StringIO()
+    offline = Config(config.config_file_name, output_buffer=buffer)
+    offline.set_main_option("script_location", config.get_main_option("script_location"))
+    offline.attributes.update(config.attributes)
+    getattr(command, args[0])(offline, args[1], sql=True)
+    return buffer.getvalue()
+
+
+def test_printed_migration_sql_is_valid_and_keeps_the_downgrade_guard(scratch_engine):  # noqa: F811
+    engine, config = scratch_engine
+    up = _offline_sql(config, "upgrade", "head")
+    assert "%%" not in up and "quote_ident(current_database())" in up
+    down = _offline_sql(config, "downgrade", "0004:0003")
+    assert "LOCK TABLE audit_events" in down
+    assert "audit_events holds events" in down.split("DROP TABLE audit_events")[0]
+
+
+def test_the_test_environment_default_works_when_a_test_runs_alone():
+    import os
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if k != "ENVIRONMENT"}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "tests/test_audit_contracts.py::test_starting_the_app_in_a_test_does_not_connect",
+        ],
+        cwd=API_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stdout[-2000:]

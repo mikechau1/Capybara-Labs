@@ -2,7 +2,12 @@
 
 Append-only, enforced by the database (migration 0004): the API's login may only SELECT and
 INSERT, and is not an owner or superuser, so it cannot get around that; triggers also refuse
-UPDATE, DELETE and TRUNCATE by anyone, and stamp `at` with the real insert time. Fixing a wrong
+UPDATE, DELETE and TRUNCATE by accident for everyone else (the owner or a superuser could
+disable them on purpose), and stamp `at` with the real insert time.
+
+`at` is the insert time, not the commit time: a slow transaction can commit an event whose `at`
+is earlier than events a reader has already seen. The audit page (card M4-03) should not page
+by `at` alone as if no earlier event could still appear. Fixing a wrong
 event means recording a correcting one. No retention or erasure path exists yet (a team
 decision; it would have to run as the owner and record an event of its own).
 

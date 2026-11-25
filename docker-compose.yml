@@ -74,6 +74,8 @@ services:
     # Only `migrate` and `db` get the owner's credentials (card M3-07).
     environment:
       MIGRATION_DATABASE_URL: ""
+      TEST_DATABASE_URL: ""
+      POSTGRES_USER: ""
       POSTGRES_PASSWORD: ""
     depends_on:
       db:
@@ -108,6 +110,8 @@ services:
       # The UI never talks to the database (it calls the API).
       DATABASE_URL: ""
       MIGRATION_DATABASE_URL: ""
+      TEST_DATABASE_URL: ""
+      POSTGRES_USER: ""
       POSTGRES_PASSWORD: ""
       APP_DB_PASSWORD: ""
     depends_on:

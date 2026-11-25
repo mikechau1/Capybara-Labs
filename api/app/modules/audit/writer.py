@@ -17,7 +17,7 @@ answer would then be committed without its event. Let the error end the request.
 from sqlalchemy.orm import Session
 
 from app.modules.audit import models
-from app.modules.audit.schemas import AuditEvent, AuditEventCreate
+from app.modules.audit.schemas import AuditEvent, AuditEventCreate, without_nul
 from app.shared.logs import current_request_id
 
 
@@ -27,6 +27,9 @@ def record(db: Session, event: AuditEventCreate) -> AuditEvent:
     # One JSON dump for every JSONB column, so UUIDs, datetimes and enums (in `detail` too)
     # are stored as strings; the engine has no JSON serializer of its own.
     as_json = event.model_dump(mode="json")
+    # Cleaned again after dumping: values that only become text when dumped (bytes, models) were
+    # not strings when the schema cleaned `detail`.
+    as_json["detail"] = without_nul(as_json["detail"])
     row = models.AuditEvent(
         type=event.type,
         request_id=current_request_id(),

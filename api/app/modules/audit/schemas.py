@@ -36,22 +36,28 @@ DepartmentId = Annotated[
 _DEPARTMENT_ID: TypeAdapter[str] = TypeAdapter(DepartmentId)
 
 
+def _storable(text: str) -> str:
+    """`text` as PostgreSQL can store it: NUL characters removed and lone surrogates (which JSON
+    allows but UTF-8 can't encode) replaced, so a user's odd input never fails the request."""
+    return text.replace("\x00", "").encode("utf-8", "replace").decode("utf-8")
+
+
 def _no_nul_in_id(value: str) -> str:
-    # Refused, not cleaned: an id must be recorded exactly, and PostgreSQL text can't hold NUL.
-    if "\x00" in value:
-        raise ValueError("ids cannot contain NUL characters")
+    # Refused, not cleaned: an id must be recorded exactly.
+    if _storable(value) != value:
+        raise ValueError("ids cannot contain NUL characters or lone surrogates")
     return value
 
 
-def _without_nul(value: Any) -> Any:
-    """`value` with NUL characters removed from every string, at any depth, keys included.
-    PostgreSQL text and JSONB cannot store them, and one would fail the whole request."""
+def without_nul(value: Any) -> Any:
+    """`value` with every string, at any depth, keys included, made storable (`_storable`).
+    PostgreSQL text and JSONB cannot hold NUL or lone surrogates."""
     if isinstance(value, str):
-        return value.replace("\x00", "")
+        return _storable(value)
     if isinstance(value, dict):
-        return {_without_nul(k): _without_nul(v) for k, v in value.items()}
+        return {without_nul(k): without_nul(v) for k, v in value.items()}
     if isinstance(value, list | tuple):
-        return [_without_nul(v) for v in value]
+        return [without_nul(v) for v in value]
     return value
 
 
@@ -75,7 +81,7 @@ class AuditEventCreate(BaseModel):
     """
 
     type: EventType
-    user_id: Annotated[str, Field(min_length=1), AfterValidator(_no_nul_in_id)]
+    user_id: Annotated[str, Field(min_length=1, max_length=255), AfterValidator(_no_nul_in_id)]
     user_department: DepartmentId
     user_role: Role
     user_is_admin: bool = False
@@ -95,12 +101,12 @@ class AuditEventCreate(BaseModel):
     @classmethod
     def _no_nul(cls, value: str | None) -> str | None:
         # PostgreSQL text cannot hold NUL characters; storing one would fail the whole request.
-        return value.replace("\x00", "") if value is not None else None
+        return _storable(value) if value is not None else None
 
     @field_validator("detail", mode="before")
     @classmethod
     def _no_nul_in_detail(cls, value: Any) -> Any:
-        return _without_nul(value)
+        return without_nul(value)
 
     @field_validator("pools_searched", "pools_denied", "pools_used")
     @classmethod

@@ -38,6 +38,9 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         compare_type=True,
+        # Without this, the psycopg dialect doubles every % in the printed SQL, which breaks the
+        # RAISE messages in the trigger functions (Alembic's own template sets it too).
+        dialect_opts={"paramstyle": "named"},
     )
     with context.begin_transaction():
         context.run_migrations()
