@@ -297,6 +297,29 @@ def test_an_update_that_changes_nothing_keeps_updated_at(db: Session):
     assert db.scalar(text("SELECT updated_at FROM sources")) == long_ago
 
 
+def test_an_orm_update_that_changes_nothing_keeps_updated_at(db: Session):
+    """The same through SQLAlchemy: it must not add `updated_at = now()` to the statement."""
+    src = make.source(db)
+    long_ago = datetime(2000, 1, 1, tzinfo=UTC)
+    db.execute(update(Source).where(Source.id == src.id).values(updated_at=long_ago))
+    db.execute(update(Source).where(Source.id == src.id).values(name=src.name))
+    assert db.scalar(text("SELECT updated_at FROM sources")) == long_ago
+    db.execute(update(Source).where(Source.id == src.id).values(name="renamed"))
+    assert db.scalar(text("SELECT updated_at FROM sources")) != long_ago
+
+
+def test_an_orm_change_still_stamps_updated_at(db: Session):
+    src = make.source(db)
+    long_ago = datetime(2000, 1, 1, tzinfo=UTC)
+    db.execute(update(Source).where(Source.id == src.id).values(updated_at=long_ago))
+    db.expire_all()
+    src = db.get(Source, src.id)
+    src.name = "changed"
+    db.flush()
+    db.expire_all()
+    assert db.get(Source, src.id).updated_at != long_ago
+
+
 def test_in_place_edits_to_source_config_are_saved(db: Session):
     src = make.source(db)
     src.config["folder"] = "seed/docs/finance"

@@ -34,7 +34,7 @@ from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
-from sqlalchemy import DateTime, Engine, Enum, MetaData, create_engine, func
+from sqlalchemy import DateTime, Engine, Enum, FetchedValue, MetaData, create_engine, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.config import get_settings
@@ -80,14 +80,15 @@ def enum_column(enum_cls: type[StrEnum], name: str) -> Enum:
 class Timestamps:
     """Adds created_at and updated_at, both set by the database.
 
-    `onupdate` only fires for ORM updates, so each table also needs the `set_updated_at`
-    trigger in its migration (see 0002); that covers raw SQL and upserts too, and leaves the
-    stamp alone when an UPDATE changes nothing.
+    The `set_updated_at` trigger (add it to each table's migration, see 0002) does the stamping
+    for every kind of UPDATE (ORM, raw SQL, upserts), and leaves the stamp alone when nothing
+    changed. The ORM must not set it itself (no `onupdate`): it would add `updated_at = now()`
+    to every UPDATE, so no statement would ever count as "nothing changed".
     """
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), server_default=func.now(), server_onupdate=FetchedValue()
     )
 
 

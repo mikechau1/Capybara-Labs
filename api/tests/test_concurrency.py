@@ -101,3 +101,19 @@ def test_rechunking_while_deleting_is_refused(db_engine, document_id):
 
     assert errors and "is deleted" in errors[0]
     assert _chunks_left(db_engine, document_id) == 0
+
+
+@pytest.mark.parametrize("level", ["REPEATABLE READ", "SERIALIZABLE"])
+def test_marking_deleted_outside_read_committed_is_refused(db_engine, document_id, level):
+    """Under a snapshot isolation level the trigger's DELETE would run on the old snapshot and
+    miss a chunk committed while it waited, so it refuses instead of leaving one behind."""
+    with db_engine.connect() as c:
+        c.execute(text(f"SET TRANSACTION ISOLATION LEVEL {level}"))
+        with pytest.raises(Exception, match="READ COMMITTED"):
+            c.execute(text("UPDATE documents SET deleted = true WHERE id = :d"), {"d": document_id})
+        c.rollback()
+    with db_engine.connect() as c:
+        assert (
+            c.scalar(text("SELECT deleted FROM documents WHERE id = :d"), {"d": document_id})
+            is False
+        )
