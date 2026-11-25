@@ -117,3 +117,38 @@ def test_marking_deleted_outside_read_committed_is_refused(db_engine, document_i
             c.scalar(text("SELECT deleted FROM documents WHERE id = :d"), {"d": document_id})
             is False
         )
+
+
+def test_a_temporary_chunks_table_does_not_hide_chunks_from_the_cleanup(db_engine, document_id):
+    with db_engine.connect() as c:
+        c.execute(text(_CHUNK), {"d": document_id})
+        c.execute(text("CREATE TEMP TABLE chunks (LIKE public.chunks)"))  # shadows "chunks"
+        c.execute(text("UPDATE documents SET deleted = true WHERE id = :d"), {"d": document_id})
+        left = c.scalar(
+            text("SELECT count(*) FROM public.chunks WHERE document_id = :d"), {"d": document_id}
+        )
+        c.rollback()
+    assert left == 0
+
+
+def test_a_temporary_documents_table_does_not_let_chunks_into_a_deleted_document(
+    db_engine, document_id
+):
+    with db_engine.connect() as c:
+        c.execute(text("CREATE TEMP TABLE documents AS SELECT * FROM public.documents"))
+        c.execute(
+            text("UPDATE public.documents SET deleted = true WHERE id = :d"), {"d": document_id}
+        )
+        with pytest.raises(Exception, match="is deleted"):
+            c.execute(
+                text(_CHUNK.replace("INSERT INTO chunks", "INSERT INTO public.chunks")),
+                {"d": document_id},
+            )
+        c.rollback()
+
+
+def test_read_uncommitted_counts_as_read_committed(db_engine, document_id):
+    with db_engine.connect() as c:
+        c.execute(text("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED"))
+        c.execute(text("UPDATE documents SET deleted = true WHERE id = :d"), {"d": document_id})
+        c.rollback()
