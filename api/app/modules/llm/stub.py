@@ -3,7 +3,8 @@
 No network, no key, same output every time.
 
 For the leakage tests (card M2-08), the stub keeps an exact record of everything it was given:
-`StubLLM.calls` holds every call's arguments, untouched. Assert on that, not only on the
+`StubLLM.calls` holds a deep copy of every call's arguments, taken when the call was made, so
+nothing the pipeline changes afterwards can rewrite it. Assert on that, not only on the
 answer text, because later steps (citation checks, M3-04) may rewrite or drop parts of the
 text. Its answers also repeat every input field word for word, so a canary is visible in the
 output too. Never shorten, summarise or filter either.
@@ -13,6 +14,7 @@ is enough for the seeded demo company. It is not a language model: "financial" d
 "finance", and a department named with a common word (e.g. "it") would match too often.
 """
 
+import copy
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -34,15 +36,23 @@ _WORD = re.compile(r"[a-z0-9-]+")
 
 @dataclass
 class StubCall:
-    """One call to the stub, with its arguments exactly as received."""
+    """One call to the stub, with a deep copy of its arguments as they were at the call."""
 
     operation: str  # "plan" or "answer"
     arguments: dict[str, Any] = field(default_factory=dict)
 
 
 class StubLLM:
-    def __init__(self) -> None:
+    """`answers`: optional replies to return from `answer()` in order, instead of the echo, for
+    tests of what happens after the model (e.g. citation checks, card M3-04). Calls are still
+    recorded. One instance keeps every call, so make one per test, never one per process."""
+
+    def __init__(self, answers: list[DraftAnswer] | None = None) -> None:
         self.calls: list[StubCall] = []
+        self._answers = list(answers or [])
+
+    def _record(self, operation: str, **arguments: Any) -> None:
+        self.calls.append(StubCall(operation, copy.deepcopy(arguments)))
 
     def plan(
         self, question: str, pool_descriptions: dict[str, str], metrics: dict[str, str]
@@ -51,11 +61,8 @@ class StubLLM:
         names. "Finance tickets?" -> finance/tickets; "engineering and finance" -> one query
         each, every source type; a source type only -> that type everywhere; nothing named ->
         one query over the whole scope. Never picks a metric."""
-        self.calls.append(
-            StubCall(
-                "plan",
-                {"question": question, "pool_descriptions": pool_descriptions, "metrics": metrics},
-            )
+        self._record(
+            "plan", question=question, pool_descriptions=pool_descriptions, metrics=metrics
         )
         words = set(_WORD.findall(question.lower()))
         named_types = sorted(t for t, cues in _SOURCE_WORDS.items() if words & cues)
@@ -84,9 +91,9 @@ class StubLLM:
     def answer(
         self, question: str, chunks: list[RetrievedChunk], history: list[Turn]
     ) -> DraftAnswer:
-        self.calls.append(
-            StubCall("answer", {"question": question, "chunks": chunks, "history": history})
-        )
+        self._record("answer", question=question, chunks=chunks, history=history)
+        if self._answers:
+            return self._answers.pop(0)
         lines = [f"Stub answer to: {question}"]
         for turn in history:
             lines.append(f"(earlier {turn.role}) {turn.text}")

@@ -121,8 +121,35 @@ def test_stub_answer_echoes_the_history():
     assert draft.cited == []
 
 
+def test_the_stub_record_cannot_be_rewritten_after_the_call():
+    stub = StubLLM()
+    pools = dict(POOLS)
+    stub.plan("q", pools, metrics={})
+    chunks = [_chunk(1, "CANARY-1"), _chunk(2, "CANARY-2"), _chunk(3, "CANARY-3")]
+    history = [Turn(role="user", text="H-1"), Turn(role="assistant", text="H-2")]
+    stub.answer("q", chunks, history)
+    # What a later pipeline step might do to its own objects after the model saw them.
+    pools.clear()
+    chunks[0].text = "redacted"
+    chunks[:] = chunks[1:]
+    history.pop()
+    [plan_call, answer_call] = stub.calls
+    assert plan_call.arguments["pool_descriptions"] == POOLS
+    assert [c.text for c in answer_call.arguments["chunks"]] == ["CANARY-1", "CANARY-2", "CANARY-3"]
+    assert [t.text for t in answer_call.arguments["history"]] == ["H-1", "H-2"]
+
+
+def test_scripted_stub_answers_are_returned_in_order_and_still_recorded():
+    scripted = [DraftAnswer(text="see [2] and [9]", cited=[2]), DraftAnswer(text="b", cited=[])]
+    stub = StubLLM(answers=scripted)
+    assert stub.answer("q1", [_chunk(1)], []) == scripted[0]
+    assert stub.answer("q2", [_chunk(1)], []) == scripted[1]
+    assert stub.answer("q3", [_chunk(1)], []).text.startswith("Stub answer to: q3")
+    assert [c.arguments["question"] for c in stub.calls] == ["q1", "q2", "q3"]
+
+
 def test_stub_records_every_input_exactly():
-    """M2-08 asserts on these records, which later steps cannot rewrite."""
+    """M2-08 asserts on these records."""
     stub = StubLLM()
     pools = POOLS | {"finance/docs": "CANARY-IN-DESCRIPTION"}
     stub.plan("q", pools, metrics={"open_count": "CANARY-IN-METRIC"})
@@ -149,6 +176,9 @@ def test_stub_answer_echoes_every_field_of_every_chunk_and_the_history():
     for n in range(1, 11):
         for value in (f"text-{n}", f"https://x/link-{n}", f"id-{n}", f"t-{n}", f"[{n}]"):
             assert value in draft.text
+    for chunk in chunks:
+        labels = f"{chunk.department}/{chunk.source_type.value}/{chunk.sensitivity.value}"
+        assert labels in draft.text
     assert "first" in draft.text and "second" in draft.text
     assert draft.cited == list(range(1, 11))
 
@@ -225,6 +255,51 @@ def test_other_errors_are_not_retried(error):
     assert flaky.calls == 1
 
 
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_no_call_is_started_that_cannot_finish_before_the_deadline():
+    inner = _Flaky(0, LLMUnavailable("timeout"))
+    clock = _Clock()
+    llm = RetryingLLM(inner, pause_seconds=0, timeout_seconds=8, clock=clock)
+    with pytest.raises(LLMUnavailable):
+        llm.plan("q", POOLS, {}, deadline=clock.now + 7.9)
+    assert inner.calls == 0
+    assert llm.plan("q", POOLS, {}, deadline=clock.now + 8) is not None
+    assert inner.calls == 1
+
+
+def test_no_retry_when_the_deadline_is_too_close():
+    inner = _Flaky(1, LLMUnavailable("timeout"))
+    clock = _Clock()
+    llm = RetryingLLM(inner, pause_seconds=0.5, timeout_seconds=8, clock=clock)
+    with pytest.raises(LLMUnavailable):
+        llm.plan("q", POOLS, {}, deadline=clock.now + 8.4)  # room for one call, not pause + two
+    assert inner.calls == 1
+    inner = _Flaky(1, LLMUnavailable("timeout"))
+    llm = RetryingLLM(inner, pause_seconds=0, timeout_seconds=8, clock=clock)
+    llm.plan("q", POOLS, {}, deadline=clock.now + 20)
+    assert inner.calls == 2
+
+
+def test_get_llm_uses_the_timeout_setting():
+    assert get_llm(Settings(llm_timeout_seconds=3)).timeout_seconds == 3
+
+
+def test_the_retry_pauses_first(monkeypatch):
+    import app.modules.llm as llm_module
+
+    pauses = []
+    monkeypatch.setattr(llm_module.time, "sleep", pauses.append)
+    RetryingLLM(_Flaky(1, LLMUnavailable("timeout")), pause_seconds=0.5).plan("q", POOLS, {})
+    assert pauses == [0.5]
+
+
 def test_attempts_must_be_positive():
     with pytest.raises(ValueError):
         RetryingLLM(StubLLM(), attempts=0)
@@ -249,6 +324,62 @@ def test_malformed_plans_become_bad_output_without_their_text(raw):
     with pytest.raises(LLMBadOutput) as error:
         parse_plan(raw)
     assert "slack" not in str(error.value) and "not json" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"sub_queries": []},
+        {"sub_queries": [{"query": "  "}]},
+        {"sub_queries": [{"query": "q", "department": "Finance"}]},
+        {"sub_queries": [{"query": "q", "department": "finance team"}]},
+    ],
+)
+def test_plans_the_pipeline_cannot_use_are_bad_output(raw):
+    with pytest.raises(LLMBadOutput):
+        parse_plan(raw)
+
+
+@pytest.mark.parametrize(
+    "sub_query",
+    [
+        {"query": "q", "department": "marketing"},  # not a pool the model was given
+        {"query": "q", "department": "finance", "source_type": "discord"},
+    ],
+)
+def test_a_plan_naming_a_pool_it_was_not_given_is_bad_output(sub_query):
+    pools = {"finance/docs": "d", "finance/tickets": "t", "engineering/docs": "e"}
+    with pytest.raises(LLMBadOutput, match="not given"):
+        parse_plan({"sub_queries": [sub_query]}, pools)
+
+
+def test_a_plan_within_the_given_pools_is_accepted():
+    pools = {"finance/docs": "d", "engineering/docs": "e"}
+    raw = {
+        "sub_queries": [
+            {"query": "q", "department": "finance", "source_type": "docs"},
+            {"query": "q", "department": "engineering"},
+            {"query": "q", "source_type": "docs"},
+            {"query": "q"},
+        ]
+    }
+    assert len(parse_plan(raw, pools).sub_queries) == 4
+
+
+@pytest.mark.parametrize(
+    ("parse", "raw"),
+    [
+        (parse_plan, '{"sub_queries": [{"query": "SECRET-PLAN", "source_type": "slack"}]}'),
+        (parse_answer, '{"text": "SECRET-ANSWER from a restricted chunk"}'),
+        (parse_answer, "SECRET-ANSWER not json"),
+    ],
+)
+def test_parse_errors_carry_no_model_output_and_no_chained_error(parse, raw):
+    with pytest.raises(LLMBadOutput) as error:
+        parse(raw)
+    assert "SECRET" not in str(error.value)
+    # A chained pydantic error would carry the model output (input_value=...) into logs.
+    assert error.value.__cause__ is None and error.value.__suppress_context__
 
 
 def test_parse_answer():
@@ -290,6 +421,12 @@ PROVIDER_PACKAGES = {
     "boto3",  # AWS Bedrock; move this to an allowlist if the app ever needs AWS for other things
     "botocore",
     "aiobotocore",
+    "langgraph",
+    "haystack",
+    "semantic_kernel",
+    "smolagents",
+    "aisuite",
+    "agents",  # the OpenAI Agents SDK's import name
 }
 PROVIDER_PREFIXES = ("langchain",)  # langchain, langchain_core, langchain_openai, ...
 PROVIDER_HOSTS = (
@@ -304,8 +441,29 @@ PROVIDER_HOSTS = (
     "api.groq.com",
     "api.together",
     "api.replicate.com",
+    "openrouter.ai",
+    "api.deepseek.com",
+    "api.x.ai",
+    "api.fireworks.ai",
+    "api.perplexity.ai",
+    ":11434",  # Ollama's default port
 )
-_DYNAMIC_IMPORTS = {"import_module", "__import__", "find_spec"}
+# Calls that load a module by name. Any function whose name ends in "import_module" counts, so
+# an alias like `from importlib import import_module as load` is caught where it's imported.
+_DYNAMIC_IMPORTS = {
+    "__import__",
+    "find_spec",
+    "resolve_name",  # pkgutil
+    "locate",  # pydoc
+    "run_module",  # runpy
+    "run_path",
+    "spec_from_file_location",
+    "spec_from_loader",
+}
+# Connection settings a real provider adapter (card M3-02) will read. Only app/modules/llm and
+# the settings class may use them: with a base URL and key, any module could call the model with
+# plain HTTP, which no import or hostname check can see.
+LLM_CONNECTION_SETTINGS = {"llm_api_key", "llm_base_url", "llm_endpoint", "llm_model"}
 
 
 def _is_provider(module: str) -> bool:
@@ -329,8 +487,28 @@ def _first_argument(call: ast.Call) -> ast.expr | None:
     return next((k.value for k in call.keywords if k.arg in {"name", "fullname"}), None)
 
 
+def _loads_modules(name: str) -> bool:
+    return name in _DYNAMIC_IMPORTS or name.endswith("import_module")
+
+
+def _fromlist(call: ast.Call) -> list[str]:
+    for keyword in call.keywords:
+        if keyword.arg == "fromlist" and isinstance(keyword.value, ast.List | ast.Tuple):
+            return [
+                e.value
+                for e in keyword.value.elts
+                if isinstance(e, ast.Constant) and isinstance(e.value, str)
+            ]
+    return []
+
+
 def provider_imports(source: str) -> list[str]:
-    """Ways a Python source file reaches a model provider (empty list = clean)."""
+    """Ways a Python source file reaches a model provider (empty list = clean).
+
+    A lint for the routes code normally takes, not a sandbox: deliberately obfuscated code
+    (getattr on builtins, sys.modules, strings built at run time) can still get past it, which
+    is what review is for.
+    """
     found = []
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
@@ -338,24 +516,40 @@ def provider_imports(source: str) -> list[str]:
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             names = [node.module] + [f"{node.module}.{a.name}" for a in node.names]
             found += [n for n in names if _is_provider(n)]
+            found += [
+                f"loader {a.asname or a.name}"
+                for a in node.names
+                if a.name.endswith("import_module") and a.asname
+            ]
         elif isinstance(node, ast.Call):
             func = node.func
             called = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
             arg = _first_argument(node)
-            if called in _DYNAMIC_IMPORTS and arg is not None:
+            if _loads_modules(called) and arg is not None:
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                    if _is_provider(arg.value):
-                        found.append(arg.value)
+                    module = arg.value.split(":")[0]  # pkgutil.resolve_name("pkg:attr")
+                    candidates = [module] + [f"{module}.{n}" for n in _fromlist(node)]
+                    found += [c for c in candidates if _is_provider(c)]
                 elif not _is_own_package(arg):
                     found.append(f"{called}() with a computed module name")
-            elif called in {"exec", "eval", "compile"} and isinstance(arg, ast.Constant):
-                if isinstance(arg.value, str):
+            elif called in {"exec", "eval", "compile"} and arg is not None:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                     try:
                         found += provider_imports(arg.value)
                     except SyntaxError:
                         pass
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            found += [f"provider host {h}" for h in PROVIDER_HOSTS if h in node.value]
+                elif not isinstance(arg, ast.Constant):
+                    found.append(f"{called}() of computed code")
+        elif isinstance(node, ast.Attribute) and node.attr in LLM_CONNECTION_SETTINGS:
+            found.append(f"LLM connection setting {node.attr}")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str | bytes):
+            text = node.value if isinstance(node.value, str) else node.value.decode("latin-1")
+            found += [f"provider host {h}" for h in PROVIDER_HOSTS if h in text]
+            found += [
+                f"LLM connection setting {n.upper()}"
+                for n in LLM_CONNECTION_SETTINGS
+                if n.upper() in text
+            ]
     return found
 
 
@@ -383,6 +577,19 @@ def provider_imports(source: str) -> list[str]:
         "from transformers import pipeline",
         "import httpx\nhttpx.post('https://api.openai.com/v1/chat/completions')",
         "URL = 'https://bedrock-runtime.us-east-1.amazonaws.com'",
+        "from importlib import import_module as load\nload('openai')",
+        "import pkgutil\npkgutil.resolve_name('openai:OpenAI')",
+        "import pydoc\npydoc.locate('anthropic.Anthropic')",
+        "import runpy\nrunpy.run_module('openai')",
+        "__import__('google', fromlist=['genai'])",
+        "code = 'import ' + name\nexec(code)",
+        "URL = 'https://openrouter.ai/api/v1'",
+        "URL = 'http://localhost:11434/api/chat'",
+        "URL = b'https://api.openai.com/v1'",
+        "import langgraph",
+        "from agents import Agent",
+        "httpx.post(settings.llm_base_url, json=body)",
+        "key = os.environ['LLM_API_KEY']",
     ],
 )
 def test_the_boundary_check_catches(source):
@@ -406,12 +613,17 @@ def test_the_boundary_check_allows(source):
 
 
 def _sources_outside_llm() -> list[Path]:
-    llm_dir = APP / "modules" / "llm"
-    api = [p for p in APP.rglob("*.py") if llm_dir not in p.parents]
-    ui = [UI / "app.py"] + [
-        p for folder in ("core", "components", "views") for p in (UI / folder).rglob("*.py")
-    ]
-    return api + ui
+    """Every Python file of the API and the UI except the llm module, the settings class (which
+    declares the LLM settings) and tests, wherever later cards add them (scripts, pages)."""
+    skip_dirs = {".venv", "venv", "tests", "__pycache__", "node_modules"}
+    allowed = {APP / "modules" / "llm", APP / "config.py"}
+
+    def wanted(path: Path) -> bool:
+        if skip_dirs & set(path.parts):
+            return False
+        return not any(path == a or a in path.parents for a in allowed)
+
+    return [p for root in (APP.parent, UI) for p in root.rglob("*.py") if wanted(p)]
 
 
 def test_no_code_outside_llm_reaches_a_provider():

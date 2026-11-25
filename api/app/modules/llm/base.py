@@ -30,9 +30,10 @@ chunks actually sent. `cited` is only the model's own claim, a hint; never trust
 """
 
 import re
+from collections.abc import Iterable
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from app.modules.retrieval.gateway import RetrievedChunk
 from app.shared.types import SourceType
@@ -56,13 +57,15 @@ def split_pool_key(key: str) -> tuple[str, SourceType]:
 
 
 class SubQuery(BaseModel):
-    query: str
-    department: str | None = None  # None: anywhere in the user's scope
+    query: str = Field(pattern=r"\S")  # something to search for
+    # None: anywhere in the user's scope. Otherwise a department id (slug), never free text.
+    department: str | None = Field(default=None, pattern=_DEPARTMENT.pattern)
     source_type: SourceType | None = None  # None: every source type
 
 
 class Plan(BaseModel):
-    sub_queries: list[SubQuery]  # at most three, checked by code (card M3-03)
+    # At least one; at most three is the planner's rule to apply (card M3-03).
+    sub_queries: list[SubQuery] = Field(min_length=1)
     metric: str | None = None  # name of a predefined ticket metric (card M4-08)
     metric_params: dict[str, str] = {}
 
@@ -98,14 +101,32 @@ class LLMBadOutput(LLMError):
     question over the user's whole scope."""
 
 
-def parse_plan(raw: str | dict[str, Any]) -> Plan:
-    """A provider's reply (JSON text or a parsed dict) as a Plan, or LLMBadOutput."""
+def parse_plan(raw: str | dict[str, Any], pool_names: Iterable[str] | None = None) -> Plan:
+    """A provider's reply (JSON text or a parsed dict) as a Plan, or LLMBadOutput.
+
+    Pass `pool_names` (the keys of the `pool_descriptions` the model was given): a sub-query
+    naming a department, or a department and source type, that isn't among them was invented
+    by the model, so the plan is refused instead of becoming a spurious "no access" notice.
+    """
     try:
         if isinstance(raw, str):
-            return Plan.model_validate_json(raw)
-        return Plan.model_validate(raw)
+            plan = Plan.model_validate_json(raw)
+        else:
+            plan = Plan.model_validate(raw)
     except ValidationError:
         raise LLMBadOutput("the model's plan was not in the expected shape") from None
+    if pool_names is not None:
+        known = {split_pool_key(name) for name in pool_names}
+        departments = {department for department, _ in known}
+        for sub_query in plan.sub_queries:
+            if sub_query.department is None:
+                continue
+            if sub_query.department not in departments or (
+                sub_query.source_type is not None
+                and (sub_query.department, sub_query.source_type) not in known
+            ):
+                raise LLMBadOutput("the model's plan named a pool it was not given")
+    return plan
 
 
 def parse_answer(raw: str | dict[str, Any]) -> DraftAnswer:
