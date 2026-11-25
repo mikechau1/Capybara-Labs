@@ -11,12 +11,17 @@ The database enforces the shape of a grant, so a bad row cannot exist even if AP
 - the grantee is exactly one of: a department (or any) plus a minimum role, or one named user;
 - a grant gives internal or restricted access (public needs no grant);
 - a restricted grant must expire;
-- user ids are never empty or blank, and a grant cannot be revoked before it was created;
-- a grant never changes after creation (trigger in migration 0003): the one allowed update is
-  revoking it, once, and the database moves a revoke time earlier than creation up to the
-  creation time. Rows are never deleted, so audit events can always point back to them.
-`created_at` is set by the database; the grants API (card M4-01) must never accept it from a
-client, or the expiry check could be dodged with a backdated row.
+- user ids are never empty and never start or end with whitespace;
+- a grant never changes after creation (triggers in migration 0003): the one allowed update is
+  revoking it, once, and that covers every column, including ones added later. Rows are never
+  deleted or truncated, so audit events can always point back to them.
+- `created_at` and `revoked_at` are stamped with the database's clock, whatever the caller
+  sends, so a grant can't be backdated, start in the future, or show a false revoke time.
+
+For the grants API (card M4-01): revoke with
+`UPDATE grants SET revoked_at = now() WHERE id = :id AND revoked_at IS NULL` and treat 0 rows
+as "already revoked" (409). Without the `revoked_at IS NULL` condition, the second of two
+concurrent revokes hits the trigger's "already revoked" error instead.
 """
 
 import uuid
@@ -51,10 +56,14 @@ class Grant(Base):
             "revoked_at IS NULL OR revoked_at >= created_at", name="revoked_after_created"
         ),
         CheckConstraint(
-            "grantee_user_id IS NULL OR grantee_user_id ~ '^\\S(.*\\S)?$'",
+            "grantee_user_id IS NULL OR grantee_user_id"
+            " ~ '^[^ \\t\\n\\r\\f\\v](.*[^ \\t\\n\\r\\f\\v])?$'",
             name="user_id_not_empty",
         ),
-        CheckConstraint("created_by ~ '^\\S(.*\\S)?$'", name="created_by_not_empty"),
+        CheckConstraint(
+            "created_by ~ '^[^ \\t\\n\\r\\f\\v](.*[^ \\t\\n\\r\\f\\v])?$'",
+            name="created_by_not_empty",
+        ),
         # Scope resolution reads only active grants, looked up by grantee.
         Index(
             "ix_grants_active_grantee",

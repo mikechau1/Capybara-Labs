@@ -10,7 +10,11 @@ from app.shared.types import Role, Sensitivity, SourceType
 
 # Non-empty, with no leading or trailing whitespace. Refused, never silently trimmed, and the
 # same rule as the grants table's CHECK constraints.
-NonBlank = Annotated[str, StringConstraints(pattern=r"^\S(?:[\s\S]*\S)?$")]
+# "Whitespace" is exactly space, tab, newline, CR, form feed and vertical tab, written out the
+# same way in the CHECKs (PostgreSQL's and Python's \s disagree on Unicode spaces).
+NonBlank = Annotated[str, StringConstraints(pattern=r"^[^ \t\n\r\f\v](?:[\s\S]*[^ \t\n\r\f\v])?$")]
+# Department ids, as departments.id_is_slug enforces; "any" is mapped to None before this.
+DepartmentId = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]*$")]
 ANY = "any"  # what an API caller sends to mean "any department" or "any source type"
 EXPIRY_MARGIN = timedelta(minutes=5)
 
@@ -20,7 +24,7 @@ class GrantRules(BaseModel):
     is refused before it reaches the database or `resolve_scope`. Here None means "any"."""
 
     # Grantee: either a department (or None for any) plus minimum role, or one named user.
-    grantee_department: str | None = None
+    grantee_department: DepartmentId | None = None
     grantee_min_role: Role | None = None
     grantee_user_id: NonBlank | None = None
     source_type: SourceType | None = None  # None means any
@@ -90,7 +94,7 @@ class Grant(GrantRules):
 
 
 class AccessRequestCreate(BaseModel):
-    department: str
+    department: DepartmentId
     source_type: SourceType
     justification: str
 
@@ -98,7 +102,10 @@ class AccessRequestCreate(BaseModel):
 class AccessRequestDecision(BaseModel):
     # Used when approving; ignored when denying.
     max_sensitivity: Sensitivity = Sensitivity.INTERNAL
-    expires_at: datetime | None = None  # default 30 days, set by the API
+    # Default 30 days, set by the API. Timezone-aware, like GrantCreate.expires_at, so turning
+    # an approval into a GrantCreate (card M4-04) can't fail on a naive time; that GrantCreate
+    # still applies the 5-minute margin.
+    expires_at: AwareDatetime | None = None
     note: str | None = None
 
 

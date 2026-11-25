@@ -97,11 +97,13 @@ def upgrade() -> None:
             name=op.f("ck_grants_revoked_after_created"),
         ),
         sa.CheckConstraint(
-            "grantee_user_id IS NULL OR grantee_user_id ~ '^\\S(.*\\S)?$'",
+            "grantee_user_id IS NULL OR grantee_user_id"
+            " ~ '^[^ \\t\\n\\r\\f\\v](.*[^ \\t\\n\\r\\f\\v])?$'",
             name=op.f("ck_grants_user_id_not_empty"),
         ),
         sa.CheckConstraint(
-            "created_by ~ '^\\S(.*\\S)?$'", name=op.f("ck_grants_created_by_not_empty")
+            "created_by ~ '^[^ \\t\\n\\r\\f\\v](.*[^ \\t\\n\\r\\f\\v])?$'",
+            name=op.f("ck_grants_created_by_not_empty"),
         ),
         sa.ForeignKeyConstraint(
             ["grantee_department"],
@@ -133,7 +135,8 @@ def upgrade() -> None:
 
     op.execute(
         """
-        CREATE FUNCTION grants_only_revoke() RETURNS trigger LANGUAGE plpgsql AS $$
+        CREATE FUNCTION grants_only_revoke() RETURNS trigger LANGUAGE plpgsql
+            SET search_path = pg_catalog, public AS $$
         BEGIN
             IF TG_OP IN ('DELETE', 'TRUNCATE') THEN
                 RAISE EXCEPTION 'grants are never deleted; revoke instead'
@@ -143,20 +146,16 @@ def upgrade() -> None:
                 RAISE EXCEPTION 'grant % is already revoked', OLD.id
                     USING ERRCODE = 'check_violation';
             END IF;
+            -- Every column except revoked_at, including any a later migration adds.
             IF NEW.revoked_at IS NULL
-               OR (NEW.id, NEW.owning_department, NEW.grantee_department, NEW.grantee_min_role,
-                   NEW.grantee_user_id, NEW.source_type, NEW.max_sensitivity, NEW.expires_at,
-                   NEW.created_by, NEW.created_at)
-                  IS DISTINCT FROM
-                  (OLD.id, OLD.owning_department, OLD.grantee_department, OLD.grantee_min_role,
-                   OLD.grantee_user_id, OLD.source_type, OLD.max_sensitivity, OLD.expires_at,
-                   OLD.created_by, OLD.created_at)
+               OR to_jsonb(NEW) - 'revoked_at' IS DISTINCT FROM to_jsonb(OLD) - 'revoked_at'
             THEN
                 RAISE EXCEPTION 'a grant can only be revoked, never changed'
                     USING ERRCODE = 'check_violation';
             END IF;
-            -- An app clock slightly behind the database must not make a revoke fail.
-            NEW.revoked_at := GREATEST(NEW.revoked_at, OLD.created_at);
+            -- The revoke time is the database's, whatever the caller sent: never backdated,
+            -- never in the future, never before creation.
+            NEW.revoked_at := now();
             RETURN NEW;
         END $$
         """
@@ -169,9 +168,26 @@ def upgrade() -> None:
         "CREATE TRIGGER grants_no_truncate BEFORE TRUNCATE ON grants "
         "FOR EACH STATEMENT EXECUTE FUNCTION grants_only_revoke()"
     )
+    op.execute(
+        """
+        CREATE FUNCTION grants_stamp_created() RETURNS trigger LANGUAGE plpgsql
+            SET search_path = pg_catalog, public AS $$
+        BEGIN
+            -- The database's clock, so a grant can't be backdated or start in the future.
+            NEW.created_at := now();
+            RETURN NEW;
+        END $$
+        """
+    )
+    op.execute(
+        "CREATE TRIGGER grants_stamp_created BEFORE INSERT ON grants "
+        "FOR EACH ROW EXECUTE FUNCTION grants_stamp_created()"
+    )
 
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER grants_stamp_created ON grants")
+    op.execute("DROP FUNCTION grants_stamp_created()")
     op.execute("DROP TRIGGER grants_no_truncate ON grants")
     op.execute("DROP TRIGGER grants_only_revoke ON grants")
     op.execute("DROP FUNCTION grants_only_revoke()")

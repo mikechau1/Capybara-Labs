@@ -98,6 +98,8 @@ class Scope(BaseModel):
             if "pool_grants" in data:
                 if "granted" in data:
                     raise ValueError("give pool_grants or granted, not both")
+                if not isinstance(data["pool_grants"], Mapping):
+                    raise ValueError("pool_grants must map pools to grant ids")
                 data["granted"] = [
                     {"pool": pool, "grant_ids": ids}
                     for pool, ids in data.pop("pool_grants").items()
