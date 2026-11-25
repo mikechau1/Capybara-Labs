@@ -286,3 +286,20 @@ def test_user_profile(db: Session):
     db.add(UserProfile(user_id="kc-123", display_name="Olivia"))
     db.flush()
     assert db.get(UserProfile, "kc-123").display_name == "Olivia"
+
+
+def test_an_update_that_changes_nothing_keeps_updated_at(db: Session):
+    src = make.source(db)
+    long_ago = datetime(2000, 1, 1, tzinfo=UTC)
+    db.execute(update(Source).where(Source.id == src.id).values(updated_at=long_ago))
+    # A sync re-writing the same value must not look like a change.
+    db.execute(text("UPDATE sources SET sync_cursor = sync_cursor WHERE id = :id"), {"id": src.id})
+    assert db.scalar(text("SELECT updated_at FROM sources")) == long_ago
+
+
+def test_in_place_edits_to_source_config_are_saved(db: Session):
+    src = make.source(db)
+    src.config["folder"] = "seed/docs/finance"
+    db.flush()
+    db.expire_all()
+    assert db.get(Source, src.id).config == {"folder": "seed/docs/finance"}
