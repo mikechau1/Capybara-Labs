@@ -97,11 +97,11 @@ def upgrade() -> None:
             name=op.f("ck_grants_revoked_after_created"),
         ),
         sa.CheckConstraint(
-            "grantee_user_id IS NULL OR length(btrim(grantee_user_id)) > 0",
+            "grantee_user_id IS NULL OR grantee_user_id ~ '^\\S(.*\\S)?$'",
             name=op.f("ck_grants_user_id_not_empty"),
         ),
         sa.CheckConstraint(
-            "length(btrim(created_by)) > 0", name=op.f("ck_grants_created_by_not_empty")
+            "created_by ~ '^\\S(.*\\S)?$'", name=op.f("ck_grants_created_by_not_empty")
         ),
         sa.ForeignKeyConstraint(
             ["grantee_department"],
@@ -126,14 +126,16 @@ def upgrade() -> None:
     )
     # Department ids are lowercase slugs (tokens, pool names and scope fingerprints rely on it).
     op.create_check_constraint(
-        op.f("ck_departments_id_is_slug"), "departments", "id ~ '^[a-z0-9][a-z0-9-]*$'"
+        op.f("ck_departments_id_is_slug"),
+        "departments",
+        "id ~ '^[a-z0-9][a-z0-9-]*$' AND id <> 'any'",
     )
 
     op.execute(
         """
         CREATE FUNCTION grants_only_revoke() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
-            IF TG_OP = 'DELETE' THEN
+            IF TG_OP IN ('DELETE', 'TRUNCATE') THEN
                 RAISE EXCEPTION 'grants are never deleted; revoke instead'
                     USING ERRCODE = 'check_violation';
             END IF;
@@ -163,9 +165,14 @@ def upgrade() -> None:
         "CREATE TRIGGER grants_only_revoke BEFORE UPDATE OR DELETE ON grants "
         "FOR EACH ROW EXECUTE FUNCTION grants_only_revoke()"
     )
+    op.execute(
+        "CREATE TRIGGER grants_no_truncate BEFORE TRUNCATE ON grants "
+        "FOR EACH STATEMENT EXECUTE FUNCTION grants_only_revoke()"
+    )
 
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER grants_no_truncate ON grants")
     op.execute("DROP TRIGGER grants_only_revoke ON grants")
     op.execute("DROP FUNCTION grants_only_revoke()")
     op.drop_constraint(op.f("ck_departments_id_is_slug"), "departments", type_="check")

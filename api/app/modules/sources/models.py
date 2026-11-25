@@ -57,6 +57,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, Timestamps, enum_column
@@ -78,8 +79,9 @@ def _uuid_pk() -> Mapped[uuid.UUID]:
 class Department(Timestamps, Base):
     __tablename__ = "departments"
     __table_args__ = (
-        # Lowercase slugs only, as in tokens and pool names; added by migration 0003 (M2-02).
-        CheckConstraint("id ~ '^[a-z0-9][a-z0-9-]*$'", name="id_is_slug"),
+        # Lowercase slugs only, as in tokens and pool names, and never "any" (which grant
+        # requests use to mean every department). Added by migration 0003 (M2-02).
+        CheckConstraint("id ~ '^[a-z0-9][a-z0-9-]*$' AND id <> 'any'", name="id_is_slug"),
     )
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True)  # e.g. "engineering"
@@ -106,8 +108,9 @@ class Source(Timestamps, Base):
         enum_column(Sensitivity, "default_sensitivity")
     )
     # Connector settings, e.g. {"folder": "seed/docs/finance"} or {"channel_ids": [...]}.
+    # MutableDict: in-place edits (src.config["folder"] = ...) are saved too.
     config: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, default=dict, server_default=text("'{}'::jsonb")
+        MutableDict.as_mutable(JSONB), default=dict, server_default=text("'{}'::jsonb")
     )
     sync_cursor: Mapped[str | None] = mapped_column(Text)
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

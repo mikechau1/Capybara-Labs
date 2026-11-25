@@ -81,7 +81,8 @@ class Timestamps:
     """Adds created_at and updated_at, both set by the database.
 
     `onupdate` only fires for ORM updates, so each table also needs the `set_updated_at`
-    trigger in its migration (see 0002); that covers raw SQL and upserts too.
+    trigger in its migration (see 0002); that covers raw SQL and upserts too, and leaves the
+    stamp alone when an UPDATE changes nothing.
     """
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

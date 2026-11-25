@@ -7,8 +7,10 @@
 Grants API endpoints (create, revoke) are card M4-01.
 """
 
+import logging
 from datetime import UTC, datetime
 
+from pydantic import ValidationError
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
@@ -17,6 +19,8 @@ from app.modules.policies.schemas import Grant
 from app.modules.policies.scope import Scope, resolve_scope
 from app.modules.sources.models import Department
 from app.shared.types import Principal
+
+log = logging.getLogger(__name__)
 
 
 def active_grants(db: Session, now: datetime, principal: Principal | None = None) -> list[Grant]:
@@ -40,7 +44,15 @@ def active_grants(db: Session, now: datetime, principal: Principal | None = None
                 ),
             )
         )
-    return [Grant.model_validate(row, from_attributes=True) for row in db.scalars(query)]
+    grants = []
+    for row in db.scalars(query):
+        # One row the schema rejects is skipped and logged; it must never stop everyone else's
+        # scope from resolving (resolve_scope re-checks the rest).
+        try:
+            grants.append(Grant.model_validate(row, from_attributes=True))
+        except ValidationError:
+            log.warning("ignoring a malformed grant", extra={"grant_id": str(row.id)})
+    return grants
 
 
 def department_ids(db: Session) -> list[str]:

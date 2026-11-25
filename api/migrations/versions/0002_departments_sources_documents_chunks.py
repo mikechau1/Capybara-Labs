@@ -272,6 +272,11 @@ def upgrade() -> None:
         """
         CREATE FUNCTION set_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
+            -- An UPDATE that changes nothing (e.g. a sync re-writing the same values) keeps
+            -- the old stamp, so updated_at means "last real change".
+            IF NEW IS NOT DISTINCT FROM OLD THEN
+                RETURN NEW;
+            END IF;
             -- Stamp the time unless the UPDATE set updated_at itself.
             IF NEW.updated_at IS NOT DISTINCT FROM OLD.updated_at THEN
                 NEW.updated_at = now();
@@ -307,7 +312,9 @@ def _tombstone_triggers() -> None:
         """
         CREATE FUNCTION chunks_refuse_deleted_document() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
-            IF (SELECT deleted FROM documents WHERE id = NEW.document_id) THEN
+            -- FOR SHARE: a concurrent "mark deleted" either waits for this chunk's transaction
+            -- (and its trigger then removes the chunk) or finishes first and is seen here.
+            IF (SELECT deleted FROM documents WHERE id = NEW.document_id FOR SHARE) THEN
                 RAISE EXCEPTION 'document % is deleted; it cannot get chunks', NEW.document_id
                     USING ERRCODE = 'check_violation';
             END IF;

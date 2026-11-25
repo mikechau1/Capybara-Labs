@@ -1,6 +1,6 @@
 """Grant and access request shapes. Shared contract with the UI: change both sides in one PR."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -8,8 +8,11 @@ from pydantic import AwareDatetime, BaseModel, StringConstraints, model_validato
 
 from app.shared.types import Role, Sensitivity, SourceType
 
-NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+# Non-empty, with no leading or trailing whitespace. Refused, never silently trimmed, and the
+# same rule as the grants table's CHECK constraints.
+NonBlank = Annotated[str, StringConstraints(pattern=r"^\S(?:[\s\S]*\S)?$")]
 ANY = "any"  # what an API caller sends to mean "any department" or "any source type"
+EXPIRY_MARGIN = timedelta(minutes=5)
 
 
 class GrantRules(BaseModel):
@@ -45,8 +48,10 @@ class GrantCreate(GrantRules):
     @model_validator(mode="before")
     @classmethod
     def _breadth_is_explicit(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
+        if isinstance(data, GrantCreate):
             return data
+        if not isinstance(data, dict):
+            raise ValueError("a grant request must be a JSON object")
         data = dict(data)
         if data.get("source_type") in (None, ""):
             raise ValueError('source_type is required: a source type, or "any"')
@@ -61,8 +66,10 @@ class GrantCreate(GrantRules):
 
     @model_validator(mode="after")
     def _expires_in_the_future(self) -> "GrantCreate":
-        if self.expires_at is not None and self.expires_at <= datetime.now(UTC):
-            raise ValueError("expires_at must be in the future")
+        # A margin, so a slightly slow app clock can't pass a time the database (which checks
+        # expires_at > created_at with its own clock) then refuses with a 500.
+        if self.expires_at is not None and self.expires_at < datetime.now(UTC) + EXPIRY_MARGIN:
+            raise ValueError("expires_at must be at least 5 minutes in the future")
         return self
 
 

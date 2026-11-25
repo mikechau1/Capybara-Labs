@@ -51,10 +51,10 @@ class Grant(Base):
             "revoked_at IS NULL OR revoked_at >= created_at", name="revoked_after_created"
         ),
         CheckConstraint(
-            "grantee_user_id IS NULL OR length(btrim(grantee_user_id)) > 0",
+            "grantee_user_id IS NULL OR grantee_user_id ~ '^\\S(.*\\S)?$'",
             name="user_id_not_empty",
         ),
-        CheckConstraint("length(btrim(created_by)) > 0", name="created_by_not_empty"),
+        CheckConstraint("created_by ~ '^\\S(.*\\S)?$'", name="created_by_not_empty"),
         # Scope resolution reads only active grants, looked up by grantee.
         Index(
             "ix_grants_active_grantee",
