@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     oidc_issuer: str = ""
     oidc_audience: str = ""
     database_url: str = ""  # the API's limited login
-    migration_database_url: str = ""  # the owner, for Alembic only; falls back to database_url
+    migration_database_url: str = ""  # the owner, for Alembic only (required there)
     llm_provider: Literal["stub"] = "stub"  # card M3-02 adds the real provider
 
     @field_validator("log_level", mode="before")

@@ -94,7 +94,7 @@ class Timestamps:
 @lru_cache
 def get_engine() -> Engine:
     """One connection pool for the whole process, created on first use. Outside tests, refuses
-    to run as a superuser or table owner (see `check_app_login`)."""
+    to run as a login that could change the audit log (see `check_app_login`)."""
     settings = get_settings()
     if not settings.database_url:
         raise RuntimeError("DATABASE_URL is not set. Copy .env.example to .env.")
@@ -106,28 +106,62 @@ def get_engine() -> Engine:
         connect_args={"connect_timeout": 10},
     )
     if settings.environment != "test":
-        with engine.connect() as connection:
-            check_app_login(connection)
+        try:
+            with engine.connect() as connection:
+                check_app_login(connection)
+        except Exception:
+            # lru_cache doesn't keep a failed call, so without this every request would leave
+            # another privileged connection open.
+            engine.dispose()
+            raise
     return engine
 
 
+# Every role the login (session_user, so SET ROLE can't hide it) can act as, directly, by
+# inheritance or by SET ROLE, that could change or bypass the audit log: a superuser; the owner
+# of audit_events, of its schema (who can drop it) or of a trigger function on it (who can
+# replace the function); or a role holding UPDATE, DELETE, TRUNCATE or TRIGGER on it (TRIGGER
+# could add a trigger that silently drops events). pg_write_all_data counts through the
+# privilege check, which also reports every right for a superuser and normally for the owner;
+# rolsuper and ownership are still checked on their own, since an owner can revoke its own
+# rights and still disable the triggers.
+_PRIVILEGED_ROLES = text(
+    """
+    WITH log AS (SELECT to_regclass('public.audit_events') AS oid)
+    SELECT (SELECT oid FROM log) IS NULL,
+           array(
+               SELECT r.rolname FROM pg_roles r, log
+               WHERE pg_has_role(session_user, r.oid, 'MEMBER')
+                 AND (r.rolsuper
+                      OR r.oid = (SELECT relowner FROM pg_class WHERE oid = log.oid)
+                      OR r.oid = (SELECT n.nspowner FROM pg_class c
+                                  JOIN pg_namespace n ON n.oid = c.relnamespace
+                                  WHERE c.oid = log.oid)
+                      OR r.oid IN (SELECT p.proowner FROM pg_trigger t
+                                   JOIN pg_proc p ON p.oid = t.tgfoid
+                                   WHERE t.tgrelid = log.oid)
+                      OR has_table_privilege(r.oid, log.oid, 'UPDATE, DELETE, TRUNCATE, TRIGGER'))
+               ORDER BY r.rolname
+           )
+    """
+)
+
+
 def check_app_login(connection: Connection) -> None:
-    """Refuse a login that could edit the audit log: a superuser, or the owner of audit_events.
+    """Refuse a login that could change the audit log (see `_PRIVILEGED_ROLES`).
 
     The API must connect as its limited login (DATABASE_URL, see infra/postgres/README.md). An
-    old .env pointing at the owner would otherwise run silently, relying only on triggers that a
-    superuser can switch off.
+    old .env pointing at the owner would otherwise run silently, relying only on triggers that
+    the owner or a superuser can switch off.
     """
-    superuser, owner = connection.execute(
-        text(
-            "SELECT r.rolsuper, EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'audit_events'"
-            " AND tableowner = current_user) FROM pg_roles r WHERE r.rolname = current_user"
-        )
-    ).one()
-    if superuser or owner:
+    missing, roles = connection.execute(_PRIVILEGED_ROLES).one()
+    if missing:
+        raise RuntimeError("The audit_events table doesn't exist: run the migrations first.")
+    if roles:
         raise RuntimeError(
-            "The API is connected to the database as a superuser or table owner. Set "
-            "DATABASE_URL to the limited app login (copy .env.example to .env, then "
+            f"The API's database login can act as {', '.join(roles)}, which can change the "
+            "audit log (a superuser, an owner, or UPDATE, DELETE, TRUNCATE or TRIGGER rights). "
+            "Set DATABASE_URL to the limited app login (copy .env.example to .env, then "
             "docker compose down -v). See infra/postgres/README.md."
         )
 

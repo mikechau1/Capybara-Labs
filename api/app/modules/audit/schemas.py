@@ -4,7 +4,15 @@ from datetime import datetime
 from typing import Annotated, Any, Literal, get_args
 from uuid import UUID
 
-from pydantic import BaseModel, BeforeValidator, Field, StringConstraints, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    field_validator,
+)
 
 from app.shared.types import Pool, Principal, Role, Sensitivity, SourceType
 
@@ -25,6 +33,26 @@ DepartmentId = Annotated[
     BeforeValidator(lambda v: v.strip().lower() if isinstance(v, str) else v),
     StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]*$", max_length=50),
 ]
+_DEPARTMENT_ID: TypeAdapter[str] = TypeAdapter(DepartmentId)
+
+
+def _no_nul_in_id(value: str) -> str:
+    # Refused, not cleaned: an id must be recorded exactly, and PostgreSQL text can't hold NUL.
+    if "\x00" in value:
+        raise ValueError("ids cannot contain NUL characters")
+    return value
+
+
+def _without_nul(value: Any) -> Any:
+    """`value` with NUL characters removed from every string, at any depth, keys included.
+    PostgreSQL text and JSONB cannot store them, and one would fail the whole request."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {_without_nul(k): _without_nul(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_without_nul(v) for v in value]
+    return value
 
 
 class ChunkRef(BaseModel):
@@ -47,7 +75,7 @@ class AuditEventCreate(BaseModel):
     """
 
     type: EventType
-    user_id: str = Field(min_length=1)
+    user_id: Annotated[str, Field(min_length=1), AfterValidator(_no_nul_in_id)]
     user_department: DepartmentId
     user_role: Role
     user_is_admin: bool = False
@@ -68,6 +96,25 @@ class AuditEventCreate(BaseModel):
     def _no_nul(cls, value: str | None) -> str | None:
         # PostgreSQL text cannot hold NUL characters; storing one would fail the whole request.
         return value.replace("\x00", "") if value is not None else None
+
+    @field_validator("detail", mode="before")
+    @classmethod
+    def _no_nul_in_detail(cls, value: Any) -> Any:
+        return _without_nul(value)
+
+    @field_validator("pools_searched", "pools_denied", "pools_used")
+    @classmethod
+    def _pool_departments_are_ids(cls, pools: list[Pool]) -> list[Pool]:
+        # The same rule as `departments`, so an owner filter on "finance" never misses a pool
+        # recorded as "Finance".
+        return [
+            Pool(
+                department=_DEPARTMENT_ID.validate_python(p.department),
+                source_type=p.source_type,
+                sensitivity=p.sensitivity,
+            )
+            for p in pools
+        ]
 
     @classmethod
     def by(cls, principal: Principal, type: EventType, **fields: Any) -> "AuditEventCreate":

@@ -269,10 +269,12 @@ def test_future_tables_with_serial_ids_work_for_the_api_role(db: Session):
 
 
 def test_the_api_refuses_a_privileged_login(db: Session):
-    with pytest.raises(RuntimeError, match="superuser or table owner"):
+    with pytest.raises(RuntimeError, match="can change the audit log"):
         check_app_login(db.connection())  # the tests connect as the owner
     _as_app(db)
-    check_app_login(db.connection())  # the limited role is fine
+    with pytest.raises(RuntimeError, match="can change the audit log"):
+        check_app_login(db.connection())  # SET ROLE doesn't hide the superuser login
+    # A real limited login is accepted: see test_audit_contracts.py.
 
 
 def test_downgrade_refuses_to_delete_audit_events(scratch_engine):  # noqa: F811 (fixture)

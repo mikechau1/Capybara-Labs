@@ -8,19 +8,19 @@ Each file in `versions/` is one step that changes the database structure. They r
 
 Migrations are copied into the image when it is built, so after pulling a teammate's new migration, rebuild and restart: `docker compose up --build`. (Rebuilding only the `migrate` service would leave the API running old code.) Without `--build`, the old image runs and reports nothing to do.
 
-From your machine, with the API's virtual environment active and from the `api/` folder:
+From your machine, with the API's virtual environment active and from the `api/` folder. Migrations run as the database owner, so they read `MIGRATION_DATABASE_URL` only (never `DATABASE_URL`, the API's limited login):
 
 Windows (PowerShell):
 
 ```powershell
-$env:DATABASE_URL="postgresql+psycopg://capybara:capybara@localhost:5432/capybara"
+$env:MIGRATION_DATABASE_URL="postgresql+psycopg://capybara:capybara@localhost:5432/capybara"
 alembic upgrade head
 ```
 
 macOS / Linux (bash):
 
 ```bash
-DATABASE_URL=postgresql+psycopg://capybara:capybara@localhost:5432/capybara alembic upgrade head
+MIGRATION_DATABASE_URL=postgresql+psycopg://capybara:capybara@localhost:5432/capybara alembic upgrade head
 ```
 
 Use your `POSTGRES_HOST_PORT` instead of `5432` if you changed it. Other useful commands: `alembic current` shows where a database is, `alembic history` lists the steps, `alembic downgrade -1` undoes the last step, and `alembic upgrade head --sql` prints the SQL without running it.
@@ -45,6 +45,6 @@ Use your `POSTGRES_HOST_PORT` instead of `5432` if you changed it. Other useful 
 
 **New table with `Timestamps`?** Add the `set_updated_at` trigger to it in your migration (copy from `0002`), so `updated_at` also changes on raw SQL and upserts; `tests/test_migrations.py` checks every table has it.
 
-**What the API may do with your new table.** Migrations run as the database owner; the API connects as a limited login (`capybara_app` role, see `infra/postgres/README.md`). New tables automatically get SELECT, INSERT, UPDATE and DELETE for the API. If the API must not change or remove rows (like `audit_events`), `REVOKE` that in your migration and add a test that runs as `capybara_app` (see `tests/test_audit.py`).
+**What the API may do with your new table.** Migrations run as the database owner; the API connects as a limited login (`capybara_app` role, see `infra/postgres/README.md`). New tables automatically get SELECT, INSERT, UPDATE and DELETE for the API, **as long as every migration runs as the same owner** (`POSTGRES_USER`): the default privileges set in `0004` apply only to tables that role creates. A table created by any other role gets no API rights until a migration grants them. If the API must not change or remove rows (like `audit_events`), `REVOKE` that in your migration and add a test that runs as `capybara_app` (see `tests/test_audit.py`).
 
 Never edit a migration that has been merged; add a new one instead, because teammates' databases have already run the old one.

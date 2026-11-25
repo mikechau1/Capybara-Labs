@@ -24,6 +24,9 @@ from app.shared.logs import current_request_id
 def record(db: Session, event: AuditEventCreate) -> AuditEvent:
     departments = set(event.departments)
     departments |= {p.department for p in event.pools_searched + event.pools_used}
+    # One JSON dump for every JSONB column, so UUIDs, datetimes and enums (in `detail` too)
+    # are stored as strings; the engine has no JSON serializer of its own.
+    as_json = event.model_dump(mode="json")
     row = models.AuditEvent(
         type=event.type,
         request_id=current_request_id(),
@@ -32,14 +35,14 @@ def record(db: Session, event: AuditEventCreate) -> AuditEvent:
         user_role=event.user_role,
         user_is_admin=event.user_is_admin,
         question=event.question,
-        pools_searched=[p.model_dump(mode="json") for p in event.pools_searched],
-        pools_denied=[p.model_dump(mode="json") for p in event.pools_denied],
-        pools_used=[p.model_dump(mode="json") for p in event.pools_used],
-        chunks_retrieved=[c.model_dump(mode="json") for c in event.chunks_retrieved],
-        chunks_cited=[c.model_dump(mode="json") for c in event.chunks_cited],
+        pools_searched=as_json["pools_searched"],
+        pools_denied=as_json["pools_denied"],
+        pools_used=as_json["pools_used"],
+        chunks_retrieved=as_json["chunks_retrieved"],
+        chunks_cited=as_json["chunks_cited"],
         grant_ids=sorted(str(g) for g in event.grant_ids),
         departments=sorted(departments),
-        detail=event.detail,
+        detail=as_json["detail"],
     )
     db.add(row)
     db.flush()

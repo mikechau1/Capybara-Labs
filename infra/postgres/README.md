@@ -11,7 +11,7 @@ If you change `APP_DB_USER` or `APP_DB_PASSWORD`, or your volume predates this, 
 
 Guards:
 
-- The API refuses to use the database if its login is a superuser or owns `audit_events` (`app/db.py`), so an old `.env` fails loudly instead of quietly running with full rights.
+- The API refuses to start if its login can act, directly, through role membership or by `SET ROLE`, as a role that could change the audit log: a superuser, the owner of `audit_events`, its schema or a trigger function on it, or a role with UPDATE, DELETE, TRUNCATE or TRIGGER on it (`check_app_login` in `app/db.py`). An old `.env` then fails loudly instead of quietly running with full rights.
 - Only the `migrate` service receives the owner's URL and password; Compose blanks them for `api` and `ui`.
 - Nobody but the owner may create temporary tables (one named `audit_events` would otherwise shadow the real log on that connection).
 
