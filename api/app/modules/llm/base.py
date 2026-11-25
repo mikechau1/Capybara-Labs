@@ -140,15 +140,28 @@ def parse_answer(raw: str | dict[str, Any]) -> DraftAnswer:
 
 
 class LLM(Protocol):
+    """Every implementation takes `deadline` (a `time.monotonic()` value, or None): a provider
+    should cap its request timeout at the time left; the stub ignores it."""
+
     def plan(
-        self, question: str, pool_descriptions: dict[str, str], metrics: dict[str, str]
+        self,
+        question: str,
+        pool_descriptions: dict[str, str],
+        metrics: dict[str, str],
+        *,
+        deadline: float | None = None,
     ) -> Plan:
         """`pool_descriptions` maps every pool name ("finance/tickets") to its fixed
         description. `metrics` maps metric names to descriptions (empty until card M4-08)."""
         ...
 
     def answer(
-        self, question: str, chunks: list[RetrievedChunk], history: list[Turn]
+        self,
+        question: str,
+        chunks: list[RetrievedChunk],
+        history: list[Turn],
+        *,
+        deadline: float | None = None,
     ) -> DraftAnswer:
         """`chunks[i]` is cited as [i + 1]. Chunk text is untrusted data, never instructions."""
         ...

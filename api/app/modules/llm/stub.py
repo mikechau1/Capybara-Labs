@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.modules.llm.base import DraftAnswer, Plan, SubQuery, Turn, split_pool_key
+from app.modules.llm.base import DraftAnswer, LLMBadOutput, Plan, SubQuery, Turn, split_pool_key
 from app.modules.retrieval.gateway import RetrievedChunk
 from app.shared.types import SourceType
 
@@ -55,7 +55,12 @@ class StubLLM:
         self.calls.append(StubCall(operation, copy.deepcopy(arguments)))
 
     def plan(
-        self, question: str, pool_descriptions: dict[str, str], metrics: dict[str, str]
+        self,
+        question: str,
+        pool_descriptions: dict[str, str],
+        metrics: dict[str, str],
+        *,
+        deadline: float | None = None,
     ) -> Plan:
         """One sub-query per department the question names, narrowed to the source types it
         names. "Finance tickets?" -> finance/tickets; "engineering and finance" -> one query
@@ -64,6 +69,9 @@ class StubLLM:
         self._record(
             "plan", question=question, pool_descriptions=pool_descriptions, metrics=metrics
         )
+        if not question.strip():
+            # What a real provider's reply would become: nothing to search for.
+            raise LLMBadOutput("the model's plan was not in the expected shape")
         words = set(_WORD.findall(question.lower()))
         named_types = sorted(t for t, cues in _SOURCE_WORDS.items() if words & cues)
         available: dict[str, set[SourceType]] = {}
@@ -89,7 +97,12 @@ class StubLLM:
         return Plan(sub_queries=queries[:MAX_SUB_QUERIES])
 
     def answer(
-        self, question: str, chunks: list[RetrievedChunk], history: list[Turn]
+        self,
+        question: str,
+        chunks: list[RetrievedChunk],
+        history: list[Turn],
+        *,
+        deadline: float | None = None,
     ) -> DraftAnswer:
         self._record("answer", question=question, chunks=chunks, history=history)
         if self._answers:

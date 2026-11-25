@@ -26,7 +26,8 @@ API_TIMEOUT_SECONDS. The chat endpoint (card M3-05) passes `deadline=` (a `time.
 value) to both calls: a retry, or a call, that couldn't finish in time is skipped and raises
 LLMUnavailable instead. It must call these blocking methods from a normal `def` endpoint,
 never inside `async def`, and should get the model through a FastAPI dependency that tests
-override with a `StubLLM` (one per test: a stub keeps every call it receives).
+override with a `StubLLM`, or `RetryingLLM(StubLLM())` to keep the retry behaviour (one per
+test: a stub keeps every call it receives).
 """
 
 import logging
@@ -86,7 +87,9 @@ class RetryingLLM:
         deadline: float | None = None,
     ) -> Plan:
         return self._call(
-            "plan", lambda: self.inner.plan(question, pool_descriptions, metrics), deadline
+            "plan",
+            lambda: self.inner.plan(question, pool_descriptions, metrics, deadline=deadline),
+            deadline,
         )
 
     def answer(
@@ -97,7 +100,11 @@ class RetryingLLM:
         *,
         deadline: float | None = None,
     ) -> DraftAnswer:
-        return self._call("answer", lambda: self.inner.answer(question, chunks, history), deadline)
+        return self._call(
+            "answer",
+            lambda: self.inner.answer(question, chunks, history, deadline=deadline),
+            deadline,
+        )
 
     def _fits(self, deadline: float | None, wait: float = 0.0) -> bool:
         return deadline is None or self._clock() + wait + self.timeout_seconds <= deadline

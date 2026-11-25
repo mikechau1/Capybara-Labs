@@ -215,17 +215,20 @@ class _Flaky:
 
     def __init__(self, failures: int, error: Exception) -> None:
         self.calls, self.failures, self.error = 0, failures, error
+        self.deadlines: list[float | None] = []
 
     def _maybe_fail(self) -> None:
         self.calls += 1
         if self.calls <= self.failures:
             raise self.error
 
-    def plan(self, question, pool_descriptions, metrics):
+    def plan(self, question, pool_descriptions, metrics, *, deadline=None):
+        self.deadlines.append(deadline)
         self._maybe_fail()
         return Plan(sub_queries=[SubQuery(query=question)])
 
-    def answer(self, question, chunks, history):
+    def answer(self, question, chunks, history, *, deadline=None):
+        self.deadlines.append(deadline)
         self._maybe_fail()
         return DraftAnswer(text="ok", cited=[])
 
@@ -635,3 +638,23 @@ def test_no_code_outside_llm_reaches_a_provider():
         for finding in provider_imports(path.read_text(encoding="utf-8"))
     ]
     assert offenders == []
+
+
+def test_the_deadline_reaches_the_provider():
+    inner = _Flaky(0, LLMUnavailable("timeout"))
+    RetryingLLM(inner).answer("q", [_chunk(1)], [], deadline=1e12)
+    assert inner.deadlines == [1e12]
+
+
+def test_the_stub_takes_a_deadline_like_every_llm():
+    stub = StubLLM()
+    stub.plan("finance docs", POOLS, {}, deadline=1e12)
+    stub.answer("q", [_chunk(1)], [], deadline=1e12)
+    RetryingLLM(StubLLM()).plan("q", POOLS, {}, deadline=1e12)
+
+
+@pytest.mark.parametrize("question", ["", "   ", "\n"])
+def test_the_stub_planner_treats_a_blank_question_as_bad_output(question):
+    with pytest.raises(LLMBadOutput) as error:
+        StubLLM().plan(question, POOLS, {})
+    assert error.value.__cause__ is None
