@@ -232,3 +232,52 @@ def test_grants_are_never_deleted_or_truncated(db: Session, sql: str):
     with pytest.raises(IntegrityError, match="never deleted"):
         db.execute(text(sql))
     db.rollback()
+
+
+def test_a_revoke_in_a_transaction_older_than_the_grant_succeeds(db_engine):
+    """now() is the transaction's start: a job that began before a grant was created must
+    still be able to revoke it (the revoke time is moved up to the creation time)."""
+    job = db_engine.connect()
+    job.begin()
+    job.execute(text("SELECT 1"))  # the job's transaction (and its now()) starts here
+    try:
+        with db_engine.begin() as c:
+            c.execute(text("INSERT INTO departments (id, name) VALUES ('late-dept', 'Late')"))
+            c.execute(
+                text(
+                    "INSERT INTO grants (owning_department, grantee_user_id, max_sensitivity,"
+                    " created_by) VALUES ('late-dept', 'late-user', 'internal', 'owner')"
+                )
+            )
+        job.execute(
+            text(
+                "UPDATE grants SET revoked_at = now()"
+                " WHERE grantee_user_id = 'late-user' AND revoked_at IS NULL"
+            )
+        )
+        job.commit()
+        with db_engine.connect() as c:
+            assert c.scalar(
+                text(
+                    "SELECT revoked_at = created_at FROM grants WHERE grantee_user_id = 'late-user'"
+                )
+            )
+    finally:
+        job.close()
+        with db_engine.begin() as c:  # grants can't be deleted, except by the owner on purpose
+            c.execute(text("ALTER TABLE grants DISABLE TRIGGER grants_only_revoke"))
+            c.execute(text("DELETE FROM grants WHERE owning_department = 'late-dept'"))
+            c.execute(text("ALTER TABLE grants ENABLE TRIGGER grants_only_revoke"))
+            c.execute(text("DELETE FROM departments WHERE id = 'late-dept'"))
+
+
+def test_a_generated_column_added_later_does_not_block_revokes(db: Session):
+    db.execute(
+        text(
+            "ALTER TABLE grants ADD COLUMN label text"
+            " GENERATED ALWAYS AS (created_by || '!') STORED"
+        )
+    )
+    make.grant(db)
+    db.execute(text("UPDATE grants SET revoked_at = now()"))
+    assert db.scalar(text("SELECT revoked_at IS NOT NULL FROM grants"))

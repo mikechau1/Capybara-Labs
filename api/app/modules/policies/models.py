@@ -17,6 +17,9 @@ The database enforces the shape of a grant, so a bad row cannot exist even if AP
   deleted or truncated, so audit events can always point back to them.
 - `created_at` and `revoked_at` are stamped with the database's clock, whatever the caller
   sends, so a grant can't be backdated, start in the future, or show a false revoke time.
+  Restoring grants from a data-only backup therefore needs that trigger off, or every grant
+  gets the restore time (and expired or revoked ones then fail their checks): restore as the
+  owner with `ALTER TABLE grants DISABLE TRIGGER grants_stamp_created` around the load.
 
 For the grants API (card M4-01): revoke with
 `UPDATE grants SET revoked_at = now() WHERE id = :id AND revoked_at IS NULL` and treat 0 rows

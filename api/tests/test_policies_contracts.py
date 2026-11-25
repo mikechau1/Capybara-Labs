@@ -314,3 +314,13 @@ def test_the_pure_rules_fail_closed_on_their_own():
 def test_scope_pool_grants_must_be_a_mapping(pool_grants):
     with pytest.raises(ValidationError):
         Scope.model_validate({"pools": [], "pool_grants": pool_grants})
+
+
+@pytest.mark.parametrize("department", ["any", "d" * 51])
+def test_a_requested_department_must_fit_the_departments_table(department):
+    with pytest.raises(ValidationError):
+        AccessRequestCreate(department=department, source_type="docs", justification="why")
+
+
+def test_any_still_means_every_department_in_a_grant_request():
+    assert GrantCreate.model_validate(_request()).grantee_department is None

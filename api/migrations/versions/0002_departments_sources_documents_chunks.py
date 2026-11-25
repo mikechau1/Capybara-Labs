@@ -271,7 +271,7 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE FUNCTION set_updated_at() RETURNS trigger LANGUAGE plpgsql
-            SET search_path = pg_catalog, public AS $$
+            SET search_path = pg_catalog, public, pg_temp AS $$
         BEGIN
             -- An UPDATE that changes nothing (e.g. a sync re-writing the same values) keeps
             -- the old stamp, so updated_at means "last real change".
@@ -298,15 +298,19 @@ def _tombstone_triggers() -> None:
     op.execute(
         """
         CREATE FUNCTION documents_delete_chunks() RETURNS trigger LANGUAGE plpgsql
-            SET search_path = pg_catalog, public AS $$
+            SET search_path = pg_catalog, public, pg_temp AS $$
+        -- Tables are schema-qualified and pg_temp is searched last, so a temporary table named
+        -- chunks or documents can't stand in for the real one.
         BEGIN
             -- Under REPEATABLE READ or SERIALIZABLE this DELETE would run on the transaction's
             -- old snapshot and miss a chunk committed while it waited for that chunk's lock.
-            IF current_setting('transaction_isolation') <> 'read committed' THEN
+            -- (READ UNCOMMITTED behaves as READ COMMITTED in PostgreSQL.)
+            IF current_setting('transaction_isolation')
+                   NOT IN ('read committed', 'read uncommitted') THEN
                 RAISE EXCEPTION 'mark documents deleted only at READ COMMITTED isolation'
                     USING ERRCODE = 'object_not_in_prerequisite_state';
             END IF;
-            DELETE FROM chunks WHERE document_id = NEW.id;
+            DELETE FROM public.chunks WHERE document_id = NEW.id;
             RETURN NEW;
         END $$
         """
@@ -319,11 +323,11 @@ def _tombstone_triggers() -> None:
     op.execute(
         """
         CREATE FUNCTION chunks_refuse_deleted_document() RETURNS trigger LANGUAGE plpgsql
-            SET search_path = pg_catalog, public AS $$
+            SET search_path = pg_catalog, public, pg_temp AS $$
         BEGIN
             -- FOR SHARE: a concurrent "mark deleted" either waits for this chunk's transaction
             -- (and its trigger then removes the chunk) or finishes first and is seen here.
-            IF (SELECT deleted FROM documents WHERE id = NEW.document_id FOR SHARE) THEN
+            IF (SELECT deleted FROM public.documents WHERE id = NEW.document_id FOR SHARE) THEN
                 RAISE EXCEPTION 'document % is deleted; it cannot get chunks', NEW.document_id
                     USING ERRCODE = 'check_violation';
             END IF;
