@@ -192,3 +192,13 @@ def test_active_grants_for_a_user_skip_grants_meant_for_others(db: Session):
 def test_revoke_endpoint_rejects_an_id_that_is_not_a_uuid(client):
     response = client.post("/api/v1/grants/not-a-uuid/revoke", headers={"X-Dev-User": "fin.owner"})
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "sql", ["DELETE FROM grants", "TRUNCATE grants", "TRUNCATE grants CASCADE"]
+)
+def test_grants_are_never_deleted_or_truncated(db: Session, sql: str):
+    make.grant(db)
+    with pytest.raises(IntegrityError, match="never deleted"):
+        db.execute(text(sql))
+    db.rollback()

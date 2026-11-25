@@ -30,8 +30,17 @@ import logging
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from types import MappingProxyType
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    computed_field,
+    field_serializer,
+    model_validator,
+)
 
 from app.modules.policies.schemas import Grant
 from app.shared.types import (
@@ -47,30 +56,95 @@ from app.shared.types import (
 log = logging.getLogger(__name__)
 
 
-class Scope(BaseModel):
-    """A user's readable pools. Immutable: `pool_grants` is read-only, and `grant_ids` and
-    `fingerprint` are always computed from the other fields, so they can never disagree."""
+def _pool_key(pool: Pool) -> tuple[str, str, str]:
+    return (pool.department, pool.source_type.value, pool.sensitivity.value)
 
-    model_config = ConfigDict(frozen=True)
+
+class PoolGrants(BaseModel):
+    """One pool a grant gave beyond the baseline, with the ids of every grant that gives it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    pool: Pool
+    grant_ids: frozenset[str] = Field(min_length=1)
+
+    @field_serializer("grant_ids")
+    def _sorted_ids(self, ids: frozenset[str]) -> list[str]:
+        return sorted(ids)
+
+
+class Scope(BaseModel):
+    """A user's readable pools.
+
+    Immutable, hashable (usable as a cache key) and serializable: `model_dump_json()` writes
+    sorted lists plus the computed `fingerprint` and `grant_ids`, and `model_validate_json()`
+    reads that back into an equal Scope. A stored fingerprint or grant list that no longer
+    matches the pools is refused rather than trusted, since both are always recomputed.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     pools: frozenset[Pool]
-    # For each pool a grant gave beyond the baseline, the ids of every grant that gives it.
-    # Audit (card M3-07) records grants_for(the pools an answer actually used).
-    pool_grants: Mapping[Pool, frozenset[str]] = {}
+    # The pools grants gave beyond the baseline. Audit (card M3-07) records
+    # grants_for(the pools an answer actually used). Read it through `pool_grants`.
+    granted: frozenset[PoolGrants] = frozenset()
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _accept_mapping_and_verify_computed(cls, data: Any, handler: Any) -> "Scope":
+        stored_fingerprint = stored_grant_ids = None
+        if isinstance(data, dict):
+            data = dict(data)
+            if "pool_grants" in data:
+                if "granted" in data:
+                    raise ValueError("give pool_grants or granted, not both")
+                data["granted"] = [
+                    {"pool": pool, "grant_ids": ids}
+                    for pool, ids in data.pop("pool_grants").items()
+                ]
+            # Computed fields from a serialized Scope: never trusted, but they must still match.
+            stored_fingerprint = data.pop("fingerprint", None)
+            stored_grant_ids = data.pop("grant_ids", None)
+        scope = handler(data)
+        if stored_fingerprint is not None and stored_fingerprint != scope.fingerprint:
+            raise ValueError("fingerprint does not match the pools")
+        if stored_grant_ids is not None and set(stored_grant_ids) != scope.grant_ids:
+            raise ValueError("grant_ids do not match the granted pools")
+        return scope
 
     @model_validator(mode="after")
-    def _consistent_and_read_only(self) -> "Scope":
-        if not set(self.pool_grants) <= self.pools:
+    def _consistent(self) -> "Scope":
+        named = [g.pool for g in self.granted]
+        if len(named) != len(set(named)):
+            raise ValueError("a pool is listed twice in granted")
+        if not set(named) <= self.pools:
             raise ValueError("pool_grants names pools outside the scope")
-        frozen = MappingProxyType({p: frozenset(ids) for p, ids in self.pool_grants.items()})
-        object.__setattr__(self, "pool_grants", frozen)
         return self
 
+    @field_serializer("pools")
+    def _sorted_pools(self, pools: frozenset[Pool]) -> list[dict[str, str]]:
+        return [p.model_dump(mode="json") for p in sorted(pools, key=_pool_key)]
+
+    @field_serializer("granted")
+    def _sorted_granted(self, granted: frozenset[PoolGrants]) -> list[dict[str, Any]]:
+        return [g.model_dump(mode="json") for g in sorted(granted, key=lambda g: _pool_key(g.pool))]
+
+    @property
+    def pool_grants(self) -> Mapping[Pool, frozenset[str]]:
+        """Read-only: for each pool a grant gave beyond the baseline, the grants that give it."""
+        return MappingProxyType({g.pool: g.grant_ids for g in self.granted})
+
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def grant_ids(self) -> frozenset[str]:
         """Every grant that gave access beyond the baseline."""
-        return frozenset().union(*self.pool_grants.values())
+        return frozenset().union(*(g.grant_ids for g in self.granted))
 
+    @field_serializer("grant_ids")
+    def _sorted_grant_ids(self, ids: frozenset[str]) -> list[str]:
+        return sorted(ids)
+
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def fingerprint(self) -> str:
         """Stable hash of `pools`, stored on conversations (card M3-06)."""
@@ -84,7 +158,8 @@ class Scope(BaseModel):
 
     def grants_for(self, pools: Iterable[Pool]) -> frozenset[str]:
         """The grants that gave access to any of `pools` (empty if all are baseline)."""
-        return frozenset().union(*(self.pool_grants.get(p, frozenset()) for p in pools))
+        mapping = self.pool_grants
+        return frozenset().union(*(mapping.get(p, frozenset()) for p in pools))
 
 
 def _pools(
@@ -167,5 +242,7 @@ def _checked(grant: Grant) -> Grant | None:
     try:
         return Grant.model_validate(grant.model_dump(warnings=False))
     except ValidationError:
-        log.warning("ignoring a malformed grant", extra={"grant_id": str(grant.id)})
+        log.warning(
+            "ignoring a malformed grant", extra={"grant_id": str(getattr(grant, "id", None))}
+        )
         return None
