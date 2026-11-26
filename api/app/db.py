@@ -166,7 +166,7 @@ _LOGIN_PROBLEMS = text(
               ) AS v(bad, what)
               WHERE v.bad
               ORDER BY 1)
-        || array(SELECT 'is also ' || rolname FROM reachable
+        || array(SELECT 'the login is also a member of ' || rolname FROM reachable
                  WHERE rolname NOT IN (session_user, :app_role) ORDER BY rolname)
         || array(SELECT r.rolname || ' may create objects in schema ' || n.nspname
                  FROM reachable r, pg_namespace n
@@ -174,7 +174,7 @@ _LOGIN_PROBLEMS = text(
                    AND n.nspname NOT LIKE 'pg\\_temp\\_%'
                    AND n.nspname NOT LIKE 'pg\\_toast\\_temp\\_%'
                  ORDER BY 1)
-        || array(SELECT 'sees a second audit_events in schema ' || n.nspname
+        || array(SELECT 'there is a second audit_events in schema ' || n.nspname
                  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
                  WHERE c.relname = 'audit_events' AND c.oid <> (SELECT oid FROM log)
                  ORDER BY n.nspname)
@@ -204,7 +204,7 @@ def check_app_login(connection: Connection) -> None:
         raise RuntimeError("The audit_events table doesn't exist: run the migrations first.")
     if problems:
         raise RuntimeError(
-            "The API's database login can change the audit log or get around it: it "
+            "The API's database login can change the audit log or get around it: "
             f"{'; '.join(problems)}. Set DATABASE_URL to the limited app login, a member of "
             f"{APP_ROLE} only (copy .env.example to .env, then docker compose down -v). "
             "See infra/postgres/README.md."

@@ -333,7 +333,7 @@ def test_the_refusal_names_what_is_wrong(login):
     engine = login("ALTER ROLE {role} CREATEDB", "GRANT pg_write_server_files TO {role}")
     with engine.connect() as conn, pytest.raises(RuntimeError) as error:
         check_app_login(conn)
-    assert "has CREATEDB" in str(error.value) and "is also pg_write_server_files" in str(
+    assert "has CREATEDB" in str(error.value) and "member of pg_write_server_files" in str(
         error.value
     )
 
