@@ -19,10 +19,15 @@ target_metadata = Base.metadata
 
 
 def _database_url() -> str:
-    # The test fixture passes its own URL; everything else uses DATABASE_URL.
-    url = config.attributes.get("database_url") or get_settings().database_url
+    # The test fixture passes its own URL. Otherwise migrations run as the owner
+    # (MIGRATION_DATABASE_URL). There is no fallback to DATABASE_URL: that is the API's
+    # limited login, which can't create or alter tables, so it would only fail confusingly.
+    url = config.attributes.get("database_url") or get_settings().migration_database_url
     if not url:
-        raise RuntimeError("DATABASE_URL is not set. Copy .env.example to .env.")
+        raise RuntimeError(
+            "MIGRATION_DATABASE_URL is not set: migrations run as the database owner. "
+            "Copy .env.example to .env, or set it for this command (see migrations/README.md)."
+        )
     return url
 
 
@@ -33,6 +38,9 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         compare_type=True,
+        # Without this, the psycopg dialect doubles every % in the printed SQL, which breaks the
+        # RAISE messages in the trigger functions (Alembic's own template sets it too).
+        dialect_opts={"paramstyle": "named"},
     )
     with context.begin_transaction():
         context.run_migrations()

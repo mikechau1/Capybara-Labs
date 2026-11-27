@@ -26,6 +26,11 @@ from app.config import Settings, get_settings
 from app.db import get_db
 from app.main import create_app
 
+# Settings are read lazily, so this applies to the whole run: an app started with
+# `with TestClient(...)` runs its startup check only when a test asks for it.
+os.environ.setdefault("ENVIRONMENT", "test")
+get_settings.cache_clear()  # importing app.main above already cached the settings
+
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = API_ROOT.parent
 

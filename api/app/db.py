@@ -34,7 +34,17 @@ from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
-from sqlalchemy import DateTime, Engine, Enum, FetchedValue, MetaData, create_engine, func
+from sqlalchemy import (
+    Connection,
+    DateTime,
+    Engine,
+    Enum,
+    FetchedValue,
+    MetaData,
+    create_engine,
+    func,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.config import get_settings
@@ -94,17 +104,111 @@ class Timestamps:
 
 @lru_cache
 def get_engine() -> Engine:
-    """One connection pool for the whole process, created on first use."""
-    url = get_settings().database_url
-    if not url:
+    """One connection pool for the whole process, created on first use. Outside tests, refuses
+    to run as a login that could change the audit log (see `check_app_login`)."""
+    settings = get_settings()
+    if not settings.database_url:
         raise RuntimeError("DATABASE_URL is not set. Copy .env.example to .env.")
-    return create_engine(
-        url,
+    engine = create_engine(
+        settings.database_url,
         # Replace connections the database has closed, e.g. after a Postgres restart.
         pool_pre_ping=True,
         # Fail a request after 10 s if the database is unreachable, instead of hanging.
         connect_args={"connect_timeout": 10},
     )
+    if settings.environment != "test":
+        try:
+            with engine.connect() as connection:
+                check_app_login(connection)
+        except Exception:
+            # lru_cache doesn't keep a failed call, so without this every request would leave
+            # another privileged connection open.
+            engine.dispose()
+            raise
+    return engine
+
+
+# What the API's login (session_user, so SET ROLE can't hide it) may be: exactly itself plus the
+# capybara_app group, with no special attributes and no way to create anything that could
+# shadow, swallow or bypass audit_events. Checked as an allowlist of that one setup, so any
+# extra right counts, not only the ones listed here as examples:
+# - roles: any other membership (the owner, pg_write_all_data, pg_execute_server_program, ...);
+# - attributes: SUPERUSER, CREATEROLE, CREATEDB, REPLICATION, BYPASSRLS;
+# - CREATE or TEMPORARY on the database, CREATE on any schema (a schema or temp table named
+#   audit_events earlier on the search_path would swallow every event), or another relation
+#   named audit_events anywhere;
+# - owning audit_events, its schema or a trigger function on it, or holding UPDATE, DELETE,
+#   TRUNCATE or TRIGGER on it, or UPDATE on any of its columns.
+APP_ROLE = "capybara_app"
+_LOGIN_PROBLEMS = text(
+    """
+    WITH log AS (SELECT to_regclass('public.audit_events') AS oid),
+         -- Every role the login can act as: itself, inherited roles, and roles it may SET ROLE
+         -- to. Each is checked, since a right one of them holds is a right the login can use.
+         reachable AS (SELECT r.oid, r.rolname, r.rolsuper, r.rolcreaterole, r.rolcreatedb,
+                              r.rolreplication, r.rolbypassrls
+                       FROM pg_roles r WHERE pg_has_role(session_user, r.oid, 'MEMBER'))
+    SELECT
+        (SELECT oid FROM log) IS NULL,
+        array(SELECT r.rolname || ' ' || v.what
+              FROM reachable r, log, LATERAL (VALUES
+                  (r.rolsuper, 'is a superuser'),
+                  (r.rolcreaterole, 'has CREATEROLE'),
+                  (r.rolcreatedb, 'has CREATEDB'),
+                  (r.rolreplication, 'has REPLICATION'),
+                  (r.rolbypassrls, 'has BYPASSRLS'),
+                  (has_database_privilege(r.oid, current_database(), 'CREATE'),
+                   'may create schemas in the database'),
+                  (has_database_privilege(r.oid, current_database(), 'TEMPORARY'),
+                   'may create temporary tables'),
+                  (log.oid IS NOT NULL AND has_any_column_privilege(r.oid, log.oid, 'UPDATE'),
+                   'may update audit_events columns')
+              ) AS v(bad, what)
+              WHERE v.bad
+              ORDER BY 1)
+        || array(SELECT 'the login is also a member of ' || rolname FROM reachable
+                 WHERE rolname NOT IN (session_user, :app_role) ORDER BY rolname)
+        || array(SELECT r.rolname || ' may create objects in schema ' || n.nspname
+                 FROM reachable r, pg_namespace n
+                 WHERE has_schema_privilege(r.oid, n.oid, 'CREATE')
+                   AND n.nspname NOT LIKE 'pg\\_temp\\_%'
+                   AND n.nspname NOT LIKE 'pg\\_toast\\_temp\\_%'
+                 ORDER BY 1)
+        || array(SELECT 'there is a second audit_events in schema ' || n.nspname
+                 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE c.relname = 'audit_events' AND c.oid <> (SELECT oid FROM log)
+                 ORDER BY n.nspname)
+        || array(SELECT 'can act as ' || r.rolname || ', which can change audit_events'
+                 FROM reachable r, log
+                 WHERE r.oid = (SELECT relowner FROM pg_class WHERE oid = log.oid)
+                    OR r.oid = (SELECT n.nspowner FROM pg_class c
+                                JOIN pg_namespace n ON n.oid = c.relnamespace
+                                WHERE c.oid = log.oid)
+                    OR r.oid IN (SELECT p.proowner FROM pg_trigger t
+                                 JOIN pg_proc p ON p.oid = t.tgfoid WHERE t.tgrelid = log.oid)
+                    OR has_table_privilege(r.oid, log.oid, 'UPDATE, DELETE, TRUNCATE, TRIGGER')
+                 ORDER BY r.rolname)
+    """
+).bindparams(app_role=APP_ROLE)
+
+
+def check_app_login(connection: Connection) -> None:
+    """Refuse a login that is anything more than the limited app login (see `_LOGIN_PROBLEMS`).
+
+    The API must connect as its limited login (DATABASE_URL, see infra/postgres/README.md). An
+    old .env pointing at the owner, or a login given extra rights, would otherwise run
+    silently, relying only on triggers that the owner or a superuser can switch off.
+    """
+    missing, problems = connection.execute(_LOGIN_PROBLEMS).one()
+    if missing:
+        raise RuntimeError("The audit_events table doesn't exist: run the migrations first.")
+    if problems:
+        raise RuntimeError(
+            "The API's database login can change the audit log or get around it: "
+            f"{'; '.join(problems)}. Set DATABASE_URL to the limited app login, a member of "
+            f"{APP_ROLE} only (copy .env.example to .env, then docker compose down -v). "
+            "See infra/postgres/README.md."
+        )
 
 
 def import_all_models() -> None:
