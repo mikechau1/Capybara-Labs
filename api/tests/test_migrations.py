@@ -122,3 +122,52 @@ def test_every_table_with_updated_at_has_the_trigger(db: Session):
         )
     )
     assert with_column and with_column <= with_trigger, with_column - with_trigger
+
+
+def test_check_constraints_match_between_models_and_database(db: Session):
+    """Every CHECK the models declare exists in the database and vice versa, by name.
+    `alembic check` ignores CHECK constraints, so a check removed from a model (or added to a
+    migration only) would otherwise go unnoticed."""
+    from sqlalchemy.dialects import postgresql
+    from sqlalchemy.schema import CreateTable
+
+    dialect = postgresql.dialect()
+    for table in Base.metadata.sorted_tables:
+        ddl = str(CreateTable(table).compile(dialect=dialect))
+        in_models = set(re.findall(r"CONSTRAINT (ck_\w+) CHECK", ddl))
+        in_database = set(
+            db.scalars(
+                text(
+                    "SELECT c.conname FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid "
+                    "WHERE t.relname = :t AND c.contype = 'c'"
+                ),
+                {"t": table.name},
+            )
+        )
+        assert in_models == in_database, f"{table.name}: models {in_models} vs db {in_database}"
+
+
+_CHECK_DEFINITIONS = text(
+    "SELECT t.relname, c.conname, pg_get_constraintdef(c.oid) FROM pg_constraint c "
+    "JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace "
+    "WHERE c.contype = 'c' AND n.nspname = 'public'"
+)
+
+
+def test_check_constraint_definitions_match_between_models_and_migrations(scratch_engine, db):
+    """Same name is not enough: a CHECK edited in a model but not in a migration (or the other
+    way round) leaves the database enforcing a different rule than the code describes. The
+    models are built into an empty database and every definition is compared, as Postgres
+    normalizes it."""
+    engine, _ = scratch_engine
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        Base.metadata.create_all(conn)
+        from_models = {(t, c): d for t, c, d in conn.execute(_CHECK_DEFINITIONS)}
+    migrated = {(t, c): d for t, c, d in db.execute(_CHECK_DEFINITIONS)}
+    assert from_models, "no CHECK constraints found"
+    assert from_models.keys() == migrated.keys()
+    differing = {
+        k: (from_models[k], migrated[k]) for k in from_models if from_models[k] != migrated[k]
+    }
+    assert not differing, differing

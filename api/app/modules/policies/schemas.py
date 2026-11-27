@@ -1,33 +1,113 @@
 """Grant and access request shapes. Shared contract with the UI: change both sides in one PR."""
 
-from datetime import datetime
-from typing import Literal
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Any, Literal
+from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import AfterValidator, AwareDatetime, BaseModel, StringConstraints, model_validator
 
 from app.shared.types import Role, Sensitivity, SourceType
 
+# Non-empty, with no leading or trailing whitespace. Refused, never silently trimmed, and the
+# same rule as the grants table's CHECK constraints.
+# "Whitespace" is exactly space, tab, newline, CR, form feed and vertical tab, written out the
+# same way in the CHECKs (PostgreSQL's and Python's \s disagree on Unicode spaces).
+NonBlank = Annotated[str, StringConstraints(pattern=r"^[^ \t\n\r\f\v](?:[\s\S]*[^ \t\n\r\f\v])?$")]
 
-class GrantCreate(BaseModel):
+
+def _not_any(value: str) -> str:
+    if value == ANY:
+        raise ValueError('"any" is not a department id')
+    return value
+
+
+# Department ids, as departments.id_is_slug and its column enforce. GrantCreate maps "any" to
+# None before this runs, so "any" only reaches here where it can't mean every department.
+DepartmentId = Annotated[
+    str,
+    StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]*$", max_length=50),
+    AfterValidator(_not_any),
+]
+ANY = "any"  # what an API caller sends to mean "any department" or "any source type"
+EXPIRY_MARGIN = timedelta(minutes=5)
+
+
+class GrantRules(BaseModel):
+    """The same rules as the grants table's CHECK constraints (card M2-02), so a malformed grant
+    is refused before it reaches the database or `resolve_scope`. Here None means "any"."""
+
     # Grantee: either a department (or None for any) plus minimum role, or one named user.
-    grantee_department: str | None = None
+    grantee_department: DepartmentId | None = None
     grantee_min_role: Role | None = None
-    grantee_user_id: str | None = None
+    grantee_user_id: NonBlank | None = None
     source_type: SourceType | None = None  # None means any
     max_sensitivity: Sensitivity
-    expires_at: datetime | None = None  # required when max_sensitivity is restricted
+    expires_at: AwareDatetime | None = None  # required when max_sensitivity is restricted
+
+    @model_validator(mode="after")
+    def _valid_grant(self) -> "GrantRules":
+        if (self.grantee_user_id is None) == (self.grantee_min_role is None):
+            raise ValueError("a grant names either one user or a minimum role, not both or neither")
+        if self.grantee_user_id is not None and self.grantee_department is not None:
+            raise ValueError("a grant to a named user has no grantee department")
+        if self.max_sensitivity == Sensitivity.PUBLIC:
+            raise ValueError("public data needs no grant")
+        if self.max_sensitivity == Sensitivity.RESTRICTED and self.expires_at is None:
+            raise ValueError("a restricted grant must expire")
+        return self
 
 
-class Grant(GrantCreate):
-    id: str
+class GrantCreate(GrantRules):
+    """What the grants API (card M4-01) accepts. Breadth must be stated, never implied: a
+    missing or empty grantee department or source type is refused, and "any" must be sent to
+    mean any. An empty dropdown therefore can't create a company-wide grant by accident."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _breadth_is_explicit(cls, data: Any) -> Any:
+        if isinstance(data, GrantCreate):
+            return data
+        if not isinstance(data, dict):
+            raise ValueError("a grant request must be a JSON object")
+        data = dict(data)
+        if data.get("source_type") in (None, ""):
+            raise ValueError('source_type is required: a source type, or "any"')
+        if data["source_type"] == ANY:
+            data["source_type"] = None
+        if data.get("grantee_user_id") is None:
+            if data.get("grantee_department") in (None, ""):
+                raise ValueError('grantee_department is required: a department id, or "any"')
+            if data["grantee_department"] == ANY:
+                data["grantee_department"] = None
+        return data
+
+    @model_validator(mode="after")
+    def _expires_in_the_future(self) -> "GrantCreate":
+        # A margin, so a slightly slow app clock can't pass a time the database (which checks
+        # expires_at > created_at with its own clock) then refuses with a 500.
+        if self.expires_at is not None and self.expires_at < datetime.now(UTC) + EXPIRY_MARGIN:
+            raise ValueError("expires_at must be at least 5 minutes in the future")
+        return self
+
+
+class Grant(GrantRules):
+    """A stored grant, as loaded from the database."""
+
+    id: UUID  # sent as a string in JSON
     owning_department: str
-    created_by: str
-    created_at: datetime
-    revoked_at: datetime | None = None
+    created_by: NonBlank
+    created_at: AwareDatetime
+    revoked_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def _expires_after_creation(self) -> "Grant":
+        if self.expires_at is not None and self.expires_at <= self.created_at:
+            raise ValueError("expires_at must be after created_at")
+        return self
 
 
 class AccessRequestCreate(BaseModel):
-    department: str
+    department: DepartmentId
     source_type: SourceType
     justification: str
 
@@ -35,7 +115,10 @@ class AccessRequestCreate(BaseModel):
 class AccessRequestDecision(BaseModel):
     # Used when approving; ignored when denying.
     max_sensitivity: Sensitivity = Sensitivity.INTERNAL
-    expires_at: datetime | None = None  # default 30 days, set by the API
+    # Default 30 days, set by the API. Timezone-aware, like GrantCreate.expires_at, so turning
+    # an approval into a GrantCreate (card M4-04) can't fail on a naive time; that GrantCreate
+    # still applies the 5-minute margin.
+    expires_at: AwareDatetime | None = None
     note: str | None = None
 
 
@@ -49,4 +132,4 @@ class AccessRequest(AccessRequestCreate):
     decided_by: str | None = None
     decided_at: datetime | None = None
     note: str | None = None
-    grant_id: str | None = None
+    grant_id: UUID | None = None
