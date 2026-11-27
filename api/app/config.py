@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     oidc_audience: str = ""
     database_url: str = ""
     llm_provider: Literal["stub"] = "stub"  # card M3-02 adds the real provider
+    # Per request to the provider. One question makes two calls, each retried once (card M3-01).
+    llm_timeout_seconds: float = Field(default=8.0, gt=0)
 
     @field_validator("log_level", mode="before")
     @classmethod

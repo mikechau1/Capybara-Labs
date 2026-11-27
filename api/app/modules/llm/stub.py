@@ -1,16 +1,122 @@
-"""Deterministic model for tests and local work. Card M3-01 owns this file."""
+"""Deterministic model for tests and local work. Card M3-01 owns this file.
 
-from app.modules.llm.base import DraftAnswer, Plan
+No network, no key, same output every time.
+
+For the leakage tests (card M2-08), the stub keeps an exact record of everything it was given:
+`StubLLM.calls` holds a deep copy of every call's arguments, taken when the call was made, so
+nothing the pipeline changes afterwards can rewrite it. Assert on that, not only on the
+answer text, because later steps (citation checks, M3-04) may rewrite or drop parts of the
+text. Its answers also repeat every input field word for word, so a canary is visible in the
+output too. Never shorten, summarise or filter either.
+
+The planner only recognises department names and a few source-type words as whole words, which
+is enough for the seeded demo company. It is not a language model: "financial" does not match
+"finance", and a department named with a common word (e.g. "it") would match too often.
+"""
+
+import copy
+import re
+from dataclasses import dataclass, field
+from typing import Any
+
+from app.modules.llm.base import DraftAnswer, LLMBadOutput, Plan, SubQuery, Turn, split_pool_key
 from app.modules.retrieval.gateway import RetrievedChunk
+from app.shared.types import SourceType
+
+MAX_SUB_QUERIES = 3
+
+# Words in a question that point at a source type.
+_SOURCE_WORDS = {
+    SourceType.DOCS: {"doc", "docs", "document", "documents", "documentation", "wiki", "policy"},
+    SourceType.TICKETS: {"ticket", "tickets", "bug", "bugs"},
+    SourceType.DISCORD: {"discord", "channel", "thread", "threads"},
+}
+_WORD = re.compile(r"[a-z0-9-]+")
+
+
+@dataclass
+class StubCall:
+    """One call to the stub, with a deep copy of its arguments as they were at the call."""
+
+    operation: str  # "plan" or "answer"
+    arguments: dict[str, Any] = field(default_factory=dict)
 
 
 class StubLLM:
-    def plan(self, question: str, pool_descriptions: dict[str, str]) -> Plan:
-        # TODO(M3-01): rule-based plan, e.g. search the raw question everywhere in scope.
-        raise NotImplementedError("Card M3-01")
+    """`answers`: optional replies to return from `answer()` in order, instead of the echo, for
+    tests of what happens after the model (e.g. citation checks, card M3-04). Calls are still
+    recorded. One instance keeps every call, so make one per test, never one per process."""
+
+    def __init__(self, answers: list[DraftAnswer] | None = None) -> None:
+        self.calls: list[StubCall] = []
+        self._answers = list(answers or [])
+
+    def _record(self, operation: str, **arguments: Any) -> None:
+        self.calls.append(StubCall(operation, copy.deepcopy(arguments)))
+
+    def plan(
+        self,
+        question: str,
+        pool_descriptions: dict[str, str],
+        metrics: dict[str, str],
+        *,
+        deadline: float | None = None,
+    ) -> Plan:
+        """One sub-query per department the question names, narrowed to the source types it
+        names. "Finance tickets?" -> finance/tickets; "engineering and finance" -> one query
+        each, every source type; a source type only -> that type everywhere; nothing named ->
+        one query over the whole scope. Never picks a metric."""
+        self._record(
+            "plan", question=question, pool_descriptions=pool_descriptions, metrics=metrics
+        )
+        if not question.strip():
+            # What a real provider's reply would become: nothing to search for.
+            raise LLMBadOutput("the model's plan was not in the expected shape")
+        words = set(_WORD.findall(question.lower()))
+        named_types = sorted(t for t, cues in _SOURCE_WORDS.items() if words & cues)
+        available: dict[str, set[SourceType]] = {}
+        for key in pool_descriptions:
+            department, source_type = split_pool_key(key)
+            available.setdefault(department, set()).add(source_type)
+
+        queries = []
+        for department in sorted(available):
+            if department not in words:
+                continue
+            types = [t for t in named_types if t in available[department]]
+            if named_types and len(types) == 1:
+                queries.append(
+                    SubQuery(query=question, department=department, source_type=types[0])
+                )
+            else:
+                queries.append(SubQuery(query=question, department=department))
+        if not queries and len(named_types) == 1:
+            queries.append(SubQuery(query=question, source_type=named_types[0]))
+        if not queries:
+            queries.append(SubQuery(query=question))
+        return Plan(sub_queries=queries[:MAX_SUB_QUERIES])
 
     def answer(
-        self, question: str, chunks: list[RetrievedChunk], history: list[dict[str, str]]
+        self,
+        question: str,
+        chunks: list[RetrievedChunk],
+        history: list[Turn],
+        *,
+        deadline: float | None = None,
     ) -> DraftAnswer:
-        # TODO(M3-01): echo the chunks with citations, so leakage tests can inspect output.
-        raise NotImplementedError("Card M3-01")
+        self._record("answer", question=question, chunks=chunks, history=history)
+        if self._answers:
+            return self._answers.pop(0)
+        lines = [f"Stub answer to: {question}"]
+        for turn in history:
+            lines.append(f"(earlier {turn.role}) {turn.text}")
+        if not chunks:
+            lines.append("I found nothing you have access to that answers this.")
+            return DraftAnswer(text="\n".join(lines), cited=[])
+        for number, chunk in enumerate(chunks, start=1):
+            # Every field, so a canary anywhere in a chunk shows up in the answer too.
+            lines.append(
+                f"[{number}] {chunk.document_title} ({chunk.department}/{chunk.source_type.value}/"
+                f"{chunk.sensitivity.value}, {chunk.link}, id {chunk.chunk_id}):\n{chunk.text}"
+            )
+        return DraftAnswer(text="\n".join(lines), cited=list(range(1, len(chunks) + 1)))
