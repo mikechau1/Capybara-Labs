@@ -25,8 +25,9 @@ Adapters (card M3-02) must turn model replies into `Plan` / `DraftAnswer` with `
 `parse_answer`, so a malformed reply always becomes `LLMBadOutput`, and must never put model
 output or prompt text into exception messages (they reach the logs).
 
-Citations: M3-04 must parse the [n] markers from `DraftAnswer.text` and verify each against the
-chunks actually sent. `cited` is only the model's own claim, a hint; never trust it alone.
+Citations: `chat/answering.py` (M3-04) parses the [n] markers from `DraftAnswer.text` and checks
+each against the chunks actually sent. `cited` is only the model's own claim, a hint; never trust
+it alone. What an adapter sends for `answer` is built by `llm/prompts.py` (`answer_prompt`).
 """
 
 import re
@@ -79,6 +80,8 @@ class Turn(BaseModel):
     """One earlier message in the same conversation (card M3-06)."""
 
     role: Literal["user", "assistant"]
+    # A user turn: the question as typed. An assistant turn: the answer as stored, which is the
+    # markdown of CheckedAnswer.text (card M3-04); prompts.answer_prompt turns it back into text.
     text: str
 
 
@@ -129,11 +132,17 @@ def parse_plan(raw: str | dict[str, Any], pool_names: Iterable[str] | None = Non
     return plan
 
 
+_JSON_FENCE = re.compile(r"```(?:json)?[ \t]*\n(.*)\n[ \t]*```", re.DOTALL | re.IGNORECASE)
+
+
 def parse_answer(raw: str | dict[str, Any]) -> DraftAnswer:
-    """A provider's reply (JSON text or a parsed dict) as a DraftAnswer, or LLMBadOutput."""
+    """A provider's reply (JSON text or a parsed dict) as a DraftAnswer, or LLMBadOutput.
+
+    JSON text wrapped in one ```json code fence, as models often send it, is accepted."""
     try:
         if isinstance(raw, str):
-            return DraftAnswer.model_validate_json(raw)
+            fenced = _JSON_FENCE.fullmatch(raw.strip())
+            return DraftAnswer.model_validate_json(fenced.group(1) if fenced else raw)
         return DraftAnswer.model_validate(raw)
     except ValidationError:
         raise LLMBadOutput("the model's answer was not in the expected shape") from None

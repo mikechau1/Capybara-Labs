@@ -17,6 +17,8 @@ Adding a provider (card M3-02): write `app/modules/llm/<provider>.py` with a cla
   otherwise retry twice): `RetryingLLM` is the only retry, or one call becomes up to 6
   requests and the time budget below no longer holds;
 - raise `LLMUnavailable` for timeouts, rate limits and server errors;
+- build every `answer` request with `prompts.answer_prompt(question, chunks, history)`, which
+  fences chunk text off as untrusted data (card M3-04), and nothing else;
 - build replies with `parse_plan(raw, pool_descriptions)` / `parse_answer` so a malformed one
   becomes `LLMBadOutput`.
 

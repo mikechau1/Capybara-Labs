@@ -110,7 +110,9 @@ ruff check . && ruff format --check .
 | `modules/sources/router.py` | Sources list, Sync now | M4-10 |
 | `modules/retrieval/gateway.py` | The only reader of chunks | M2-07 |
 | `modules/llm/` | Model interface, stub, provider adapter | M3-01, M3-02 |
-| `modules/chat/pipeline.py` | The fixed question pipeline | M3-03, M3-04, M3-05 |
+| `modules/llm/prompts.py` | What the model is sent for an answer | M3-04 |
+| `modules/chat/answering.py` | Answer step: checks every citation | M3-04 |
+| `modules/chat/pipeline.py` | The fixed question pipeline | M3-03, M3-05 |
 | `modules/chat/router.py` | `/chat`, conversations | M3-05, M3-06 |
 | `modules/audit/` | Audit writer; audit API | M3-07; M4-03 |
 | `modules/notify/` | Discord webhook to department owners | M4-06 |

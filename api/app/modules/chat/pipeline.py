@@ -13,6 +13,6 @@ def answer_question(principal: Principal, request: ChatRequest) -> ChatResponse:
     # 2. Plan                           llm.plan, then validate           (M3-03)
     # 3. Intersect plan with scope; anything outside becomes `denied`     (M3-05)
     # 4. Retrieve                       retrieval.gateway.search          (M2-07)
-    # 5. Answer, verify citations       llm.answer                        (M3-04)
+    # 5. Answer, verify citations       chat.answering.answer_from_chunks (M3-04)
     # 6. Write the audit event in the same transaction                    (M3-07)
     raise NotImplementedError("Card M3-05")
