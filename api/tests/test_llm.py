@@ -505,6 +505,18 @@ def _fromlist(call: ast.Call) -> list[str]:
     return []
 
 
+def _builtin(func: ast.expr) -> bool:
+    """`compile(...)` or `builtins.compile(...)`, not a method that shares the name
+    (`re.compile`). exec and eval are flagged on any receiver (`b.exec`, `sys.modules[...]`)."""
+    if isinstance(func, ast.Name):
+        return True
+    return (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id in {"builtins", "__builtins__"}
+    )
+
+
 def provider_imports(source: str) -> list[str]:
     """Ways a Python source file reaches a model provider (empty list = clean).
 
@@ -535,7 +547,9 @@ def provider_imports(source: str) -> list[str]:
                     found += [c for c in candidates if _is_provider(c)]
                 elif not _is_own_package(arg):
                     found.append(f"{called}() with a computed module name")
-            elif called in {"exec", "eval", "compile"} and arg is not None:
+            elif (
+                called in {"exec", "eval"} or (called == "compile" and _builtin(func))
+            ) and arg is not None:
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                     try:
                         found += provider_imports(arg.value)
@@ -586,6 +600,12 @@ def provider_imports(source: str) -> list[str]:
         "import runpy\nrunpy.run_module('openai')",
         "__import__('google', fromlist=['genai'])",
         "code = 'import ' + name\nexec(code)",
+        "import builtins\nbuiltins.exec(code)",
+        "import builtins as b\nb.exec(code)",
+        "import builtins as b\nb.exec('import openai')",
+        "import sys\nsys.modules['builtins'].eval(code)",
+        "import builtins\nbuiltins.compile(code, 'x', 'exec')",
+        "compile(code, 'x', 'exec')",
         "URL = 'https://openrouter.ai/api/v1'",
         "URL = 'http://localhost:11434/api/chat'",
         "URL = b'https://api.openai.com/v1'",
@@ -609,6 +629,7 @@ def test_the_boundary_check_catches(source):
         "import logging\nlogging.getLogger('transformers')",
         "import importlib\nimportlib.import_module('app.modules.chat')",
         "import importlib\nimportlib.import_module(f'app.modules.{name}.models')",
+        "import re\nPATTERN = re.compile(r'(?:' + OTHER.pattern + ')')",
     ],
 )
 def test_the_boundary_check_allows(source):

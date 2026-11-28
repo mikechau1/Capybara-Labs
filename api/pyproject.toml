@@ -21,6 +21,7 @@ dev = [
   "pytest==9.2.0",
   "httpx2==2.16.2",  # used by FastAPI's TestClient
   "ruff==0.17.5",
+  "markdown-it-py==4.3.0",  # renders answers in tests/test_answering.py (card M3-04)
 ]
 
 # Installs dependencies only; the code runs from this folder.

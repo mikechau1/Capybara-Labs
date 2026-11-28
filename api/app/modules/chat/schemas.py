@@ -29,6 +29,9 @@ class DeniedPool(BaseModel):
 
 class ChatResponse(BaseModel):
     conversation_id: str
+    # Markdown, safe to render as it is with st.markdown (chat/answering.py, card M3-04). It is
+    # full of escapes and word joiners: anything else that needs the words uses
+    # app.shared.answer_text.plain_text.
     answer: str
     sources: list[Source]
     denied: list[DeniedPool]  # drives "You don't have access to ..." and Request access
