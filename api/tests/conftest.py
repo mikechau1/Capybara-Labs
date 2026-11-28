@@ -30,6 +30,12 @@ API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = API_ROOT.parent
 
 
+def pytest_configure(config):
+    """The fake embedder is the default for the whole run, including session-scoped fixtures
+    that run before the per-test fixture below. Real-model tests build LocalEmbedder directly."""
+    os.environ["EMBEDDER"] = "fake"
+
+
 def _test_settings() -> Settings:
     return Settings(environment="test", auth_mode="dev")
 
@@ -43,6 +49,20 @@ def client() -> TestClient:
 
 def as_user(username: str) -> dict[str, str]:
     return {"X-Dev-User": username}
+
+
+@pytest.fixture(autouse=True)
+def _fake_embedder(monkeypatch):
+    """Every test uses the fake embedder, so none loads (or downloads) the real model by
+    accident. Tests of the real model ask for it explicitly (tests/test_embeddings.py)."""
+    from app.shared import embeddings
+
+    monkeypatch.setenv("EMBEDDER", "fake")
+    get_settings.cache_clear()
+    embeddings.reset_embedder()
+    yield
+    get_settings.cache_clear()
+    embeddings.reset_embedder()
 
 
 # Database

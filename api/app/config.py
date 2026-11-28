@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     oidc_audience: str = ""
     database_url: str = ""
     llm_provider: Literal["stub"] = "stub"  # card M3-02 adds the real provider
+    # "local" runs all-MiniLM-L6-v2 on the CPU; "fake" is a deterministic stand-in (card M2-03).
+    embedder: Literal["local", "fake"] = "local"
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -28,6 +30,8 @@ class Settings(BaseSettings):
     def _no_dev_auth_in_production(self) -> "Settings":
         if self.environment == "production" and self.auth_mode == "dev":
             raise ValueError("AUTH_MODE=dev is not allowed when ENVIRONMENT=production")
+        if self.environment == "production" and self.embedder == "fake":
+            raise ValueError("EMBEDDER=fake is not allowed when ENVIRONMENT=production")
         return self
 
 

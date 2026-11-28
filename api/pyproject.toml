@@ -17,6 +17,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The local embedding model (card M2-03), for installs outside Docker. Large (PyTorch); install
+# CPU-only torch first: see docs/embeddings.md. Tests do not need it: they use the fake
+# embedder. Every version here must match requirements-lock.txt (a test checks).
+embeddings = [
+  "torch==2.15.0",
+  "sentence-transformers==6.2.0",
+  "transformers==5.24.0",
+  "tokenizers==0.23.3",
+  "huggingface-hub==2.4.0",
+  "numpy==2.5.5",
+  "scipy==1.18.1",
+  "scikit-learn==1.9.1",
+]
 dev = [
   "pytest==9.2.0",
   "httpx2==2.16.2",  # used by FastAPI's TestClient
